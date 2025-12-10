@@ -68,8 +68,8 @@ htmlcov/
 summary*.json
 timeline*.txt
 
-# Config with potentially sensitive paths (users should copy config.yaml.example)
-# config.yaml  # Uncomment if you want to exclude user config
+# User config (may contain API keys - use config.yaml.example as template)
+config.yaml
 
 # App bundle (build artifact)
 VideoCensor.app/
