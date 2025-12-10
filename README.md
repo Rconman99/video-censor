@@ -10,6 +10,19 @@ A fully local, offline video editing tool that automatically detects and censors
 - **Configurable**: Customize word lists, detection thresholds, and output settings
 - **Detailed Reports**: Get summaries of what was censored and when
 
+## Quick Install
+
+```bash
+# Install ffmpeg first (required)
+brew install ffmpeg
+
+# Install Video Censor from GitHub
+pip install git+https://github.com/Rconman99/video-censor.git
+
+# Launch the app
+video-censor
+```
+
 ## Requirements
 
 - macOS (tested on Sonoma/Ventura)
