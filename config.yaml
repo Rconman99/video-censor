@@ -1,0 +1,52 @@
+content_lookup:
+  cache_enabled: true
+  cache_ttl_hours: 168
+  dtdd_api_key: ''
+logging:
+  level: INFO
+  log_file: ''
+  show_progress: true
+nudity:
+  body_parts: []
+  buffer_after: 0.25
+  buffer_before: 0.25
+  frame_interval: 0.15
+  merge_gap: 0.5
+  min_cut_duration: 0.3
+  min_segment_duration: 0.5
+  threshold: 0.35
+output:
+  audio_bitrate: 192k
+  audio_codec: aac
+  custom_output_dir: ''
+  default_pattern: '{input}_censored'
+  hardware_acceleration: auto
+  quality_preset: 1080p_high
+  video_codec: libx264
+  video_crf: 23
+  video_format: mp4
+profanity:
+  beep_frequency_hz: 1000
+  beep_volume: 0.5
+  buffer_after: 0.15
+  buffer_before: 0.1
+  censor_mode: beep
+  custom_phrases_path: ''
+  custom_wordlist_path: ''
+  dynamic_buffer: true
+  dynamic_buffer_factor: 0.02
+  merge_gap: 0.3
+sexual_content:
+  buffer_after: 0.25
+  buffer_before: 0.25
+  custom_phrases_path: ''
+  custom_terms_path: ''
+  debug: false
+  enabled: true
+  merge_gap: 0.5
+  threshold: 1.0
+  unsafe_threshold: 0.5
+whisper:
+  compute_type: int8
+  language: en
+  model_size: large-v3

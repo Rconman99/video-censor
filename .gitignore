@@ -1,0 +1,79 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Logs
+*.log
+censor_video.log
+sexual_content_debug.log
+ui_debug.log
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# Output files (user-generated)
+summary*.json
+timeline*.txt
+
+# Config with potentially sensitive paths (users should copy config.yaml.example)
+# config.yaml  # Uncomment if you want to exclude user config
+
+# App bundle (build artifact)
+VideoCensor.app/
+
+# Model cache (large ML models)
+.cache/
+models/
