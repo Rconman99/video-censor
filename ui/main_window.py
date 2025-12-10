@@ -901,6 +901,25 @@ class MainWindow(QMainWindow):
         header.addLayout(title_section)
         header.addStretch()
         
+        # Feedback button
+        self.feedback_btn = QPushButton("📝 Feedback")
+        self.feedback_btn.setStyleSheet("""
+            QPushButton {
+                background: #1f1f2a;
+                color: #a0a0aa;
+                padding: 10px 16px;
+                border-radius: 8px;
+                font-size: 12px;
+                border: 1px solid #282838;
+            }
+            QPushButton:hover {
+                background: #282838;
+                color: #f5f5f8;
+            }
+        """)
+        self.feedback_btn.clicked.connect(self._show_feedback_dialog)
+        header.addWidget(self.feedback_btn)
+        
         # Status badge - movie screening style
         self.status_label = QLabel("🎞  Ready to Screen")
         self.status_label.setProperty("class", "status-idle")
@@ -1108,6 +1127,16 @@ class MainWindow(QMainWindow):
     
     def _on_file_dropped(self, path: str):
         self.preference_panel.set_video(path)
+    
+    def _show_feedback_dialog(self):
+        """Show the feedback dialog for rating processed videos."""
+        try:
+            from video_censor.feedback_dialog import FeedbackDialog
+            dialog = FeedbackDialog(self)
+            dialog.exec()
+        except Exception as e:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", f"Could not open feedback dialog: {e}")
     
     def _on_start_filtering(self, video_path: str, settings: ContentFilterSettings, profile_name: str):
         # Save quality settings to config before processing
