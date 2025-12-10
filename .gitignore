@@ -73,6 +73,8 @@ config.yaml
 
 # App bundle (build artifact)
 VideoCensor.app/
+build/
+dist/
 
 # Model cache (large ML models)
 .cache/
