@@ -289,7 +289,8 @@ def process_video(
     skip_sexual_content: bool = False,
     show_progress: bool = True,
     filter_settings: "Optional[ContentFilterSettings]" = None,
-    temp_dir_root: Optional[Path] = None
+    temp_dir_root: Optional[Path] = None,
+    use_cloud_cache: bool = True  # New: Check cloud for cached timestamps
 ) -> None:
     """
     Main processing pipeline.
@@ -305,6 +306,7 @@ def process_video(
         show_progress: Show progress indicators
         filter_settings: Optional ContentFilterSettings to control what gets filtered
         temp_dir_root: Optional directory for temporary files
+        use_cloud_cache: Check cloud database for cached timestamps (default: True)
     """
     # If filter_settings provided, derive skip flags from it
     violence_level = 0
@@ -316,6 +318,40 @@ def process_video(
         # Note: filter_romance_level and filter_mature_themes are for future use
     
     start_time = time.time()
+    
+    # Cloud cache lookup - check if we already have timestamps for this video
+    cloud_result = None
+    cloud_fingerprint = None
+    used_cloud_cache = False
+    
+    if use_cloud_cache:
+        try:
+            from video_censor.cloud_db import get_cloud_client, VideoFingerprint, DetectionResult
+            cloud_client = get_cloud_client()
+            
+            if cloud_client.is_available:
+                logger.info("Checking cloud database for cached timestamps...")
+                cloud_fingerprint = cloud_client.compute_fingerprint(
+                    str(input_path), 
+                    video_info.duration
+                )
+                
+                if cloud_fingerprint:
+                    cloud_result = cloud_client.lookup_video(cloud_fingerprint)
+                    
+                    if cloud_result:
+                        logger.info(f"🚀 FOUND CACHED TIMESTAMPS for: {cloud_result.title}")
+                        logger.info(f"   Profanity segments: {len(cloud_result.profanity_segments)}")
+                        logger.info(f"   Nudity segments: {len(cloud_result.nudity_segments)}")
+                        logger.info(f"   Sexual content: {len(cloud_result.sexual_content_segments)}")
+                        logger.info(f"   Original processing time: {cloud_result.processing_time_seconds:.1f}s")
+                        logger.info("   Skipping detection, using cached data!")
+                        used_cloud_cache = True
+                    else:
+                        logger.info("No cached timestamps found, running full detection...")
+        except Exception as e:
+            logger.debug(f"Cloud cache lookup failed (continuing with local detection): {e}")
+    
     # Create temp dir in specified location or default
     if temp_dir_root:
         temp_dir_root.mkdir(parents=True, exist_ok=True)
@@ -329,41 +365,78 @@ def process_video(
         frames = []  # Store extracted frames for reuse
         words = []  # Store for sexual content detection
         
-        # Run Step 1 (Audio) and Step 2 (Video) in parallel
-        run_audio = not skip_profanity and video_info.has_audio
-        run_video = not skip_nudity
-        
-        futures = {}
-        
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            if run_audio:
-                futures['audio'] = executor.submit(
-                    _analyze_audio, input_path, temp_dir, config
-                )
-            else:
-                if skip_profanity:
-                    logger.info("Skipping profanity detection (--no-profanity)")
-                elif not video_info.has_audio:
-                    logger.info("Skipping profanity detection (no audio track)")
+        # If we have cached cloud data, use it and skip detection
+        if used_cloud_cache and cloud_result:
+            logger.info("=" * 50)
+            logger.info("USING CACHED CLOUD TIMESTAMPS - SKIPPING DETECTION!")
+            logger.info("=" * 50)
             
-            if run_video:
-                futures['video'] = executor.submit(
-                    _analyze_video, input_path, temp_dir, config, show_progress
-                )
-            else:
-                logger.info("Skipping nudity detection (--no-nudity)")
+            # Convert cached data to interval format
+            from video_censor.editing.intervals import TimeInterval
             
-            # Collect results as they complete
-            for name, future in futures.items():
-                try:
-                    result = future.result()
-                    if name == 'audio':
-                        profanity_intervals, words = result
-                    elif name == 'video':
-                        nudity_intervals, frames = result
-                except Exception as e:
-                    logger.error(f"Error in {name} analysis: {e}")
-                    raise
+            # Profanity intervals from cloud
+            for seg in cloud_result.profanity_segments:
+                profanity_intervals.append(TimeInterval(
+                    start=seg.get('start', 0),
+                    end=seg.get('end', 0),
+                    reason=seg.get('word', 'profanity')
+                ))
+            
+            # Nudity intervals from cloud
+            for seg in cloud_result.nudity_segments:
+                nudity_intervals.append(TimeInterval(
+                    start=seg.get('start', 0),
+                    end=seg.get('end', 0),
+                    reason='nudity'
+                ))
+            
+            # Sexual content intervals from cloud
+            for seg in cloud_result.sexual_content_segments:
+                sexual_content_intervals.append(TimeInterval(
+                    start=seg.get('start', 0),
+                    end=seg.get('end', 0),
+                    reason='sexual_content'
+                ))
+            
+            logger.info(f"Loaded {len(profanity_intervals)} profanity, {len(nudity_intervals)} nudity, {len(sexual_content_intervals)} sexual content intervals")
+        else:
+            # Run detection locally
+            
+            # Run Step 1 (Audio) and Step 2 (Video) in parallel
+            run_audio = not skip_profanity and video_info.has_audio
+            run_video = not skip_nudity
+            
+            futures = {}
+            
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                if run_audio:
+                    futures['audio'] = executor.submit(
+                        _analyze_audio, input_path, temp_dir, config
+                    )
+                else:
+                    if skip_profanity:
+                        logger.info("Skipping profanity detection (--no-profanity)")
+                    elif not video_info.has_audio:
+                        logger.info("Skipping profanity detection (no audio track)")
+                
+                if run_video:
+                    futures['video'] = executor.submit(
+                        _analyze_video, input_path, temp_dir, config, show_progress
+                    )
+                else:
+                    logger.info("Skipping nudity detection (--no-nudity)")
+                
+                # Collect results as they complete
+                for name, future in futures.items():
+                    try:
+                        result = future.result()
+                        if name == 'audio':
+                            profanity_intervals, words = result
+                        elif name == 'video':
+                            nudity_intervals, frames = result
+                    except Exception as e:
+                        logger.error(f"Error in {name} analysis: {e}")
+                        raise
         
         # Step 2.5: Sexual content detection (dialog-based)
         if not skip_sexual_content and config.sexual_content.enabled and words:
@@ -514,6 +587,53 @@ def process_video(
             output_path=output_path,
             processing_time=processing_time
         )
+        
+        # Upload results to cloud database (if not already from cache)
+        if not used_cloud_cache and cloud_fingerprint is not None:
+            try:
+                from video_censor.cloud_db import get_cloud_client, DetectionResult
+                cloud_client = get_cloud_client()
+                
+                if cloud_client.is_available:
+                    # Convert intervals to serializable format
+                    profanity_data = [
+                        {'start': i.start, 'end': i.end, 'word': getattr(i, 'reason', '')}
+                        for i in profanity_intervals
+                    ]
+                    nudity_data = [
+                        {'start': i.start, 'end': i.end, 'confidence': 0.9}
+                        for i in nudity_intervals
+                    ]
+                    sexual_data = [
+                        {'start': i.start, 'end': i.end, 'score': 1.0}
+                        for i in sexual_content_intervals
+                    ]
+                    violence_data = [
+                        {'start': i.start, 'end': i.end, 'intensity': violence_level}
+                        for i in violence_intervals
+                    ] if violence_intervals else []
+                    
+                    result = DetectionResult(
+                        fingerprint=cloud_fingerprint,
+                        title=input_path.stem,
+                        nudity_segments=nudity_data,
+                        profanity_segments=profanity_data,
+                        sexual_content_segments=sexual_data,
+                        violence_segments=violence_data,
+                        settings_used={
+                            'nudity_threshold': config.nudity.threshold,
+                            'whisper_model': config.whisper.model_size,
+                        },
+                        processing_time_seconds=processing_time
+                    )
+                    
+                    if cloud_client.upload_detection(result):
+                        logger.info("📤 Uploaded detection results to cloud database for community sharing!")
+                    else:
+                        logger.debug("Could not upload results to cloud")
+            except Exception as e:
+                logger.debug(f"Cloud upload failed (non-critical): {e}")
+        
         return summary, edit_plan
         
     finally:
