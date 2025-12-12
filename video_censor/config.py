@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class SystemConfig:
+    """System-level configuration."""
+    performance_mode: str = "low_power"  # high, balanced, low_power
+
+
+
+@dataclass
 class ProfanityConfig:
     """Configuration for profanity detection."""
     custom_wordlist_path: str = ""
@@ -104,6 +111,16 @@ class LoggingConfig:
 
 
 @dataclass
+class NotificationsConfig:
+    """Configuration for push notifications."""
+    enabled: bool = False
+    ntfy_topic: str = ""  # e.g., "videocensor-yourname-12345"
+    notify_on_complete: bool = True
+    notify_on_error: bool = True
+    notify_on_batch_done: bool = True
+
+
+@dataclass
 class ContentLookupConfig:
     """Configuration for external content lookup services."""
     dtdd_api_key: str = ""  # DoesTheDogDie API key from profile
@@ -120,7 +137,9 @@ class Config:
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     content_lookup: ContentLookupConfig = field(default_factory=ContentLookupConfig)
+    system: SystemConfig = field(default_factory=SystemConfig)
     
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "Config":
@@ -167,6 +186,12 @@ class Config:
                     if hasattr(config.logging, key):
                         setattr(config.logging, key, value)
             
+            # Update notifications config
+            if 'notifications' in data:
+                for key, value in data['notifications'].items():
+                    if hasattr(config.notifications, key):
+                        setattr(config.notifications, key, value)
+            
             # Update sexual_content config
             if 'sexual_content' in data:
                 for key, value in data['sexual_content'].items():
@@ -176,8 +201,13 @@ class Config:
             # Update content_lookup config
             if 'content_lookup' in data:
                 for key, value in data['content_lookup'].items():
-                    if hasattr(config.content_lookup, key):
                         setattr(config.content_lookup, key, value)
+            
+            # Update system config
+            if 'system' in data:
+                for key, value in data['system'].items():
+                    if hasattr(config.system, key):
+                        setattr(config.system, key, value)
         
         return config
     

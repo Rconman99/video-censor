@@ -189,6 +189,22 @@ class CloudDatabaseClient:
             logger.error(f"Failed to get stats: {e}")
             return {'available': False, 'error': str(e)}
 
+    def search_videos(self, query: str) -> List[Dict[str, Any]]:
+        """Search for videos by title."""
+        if not self.is_available:
+            return []
+        
+        try:
+            response = self.client.table("video_detections").select(
+                "id, title, created_at, file_size, duration_seconds, "
+                "nudity_segments, profanity_segments, sexual_content_segments, violence_segments"
+            ).ilike("title", f"%{query}%").order("created_at", desc=True).limit(20).execute()
+            
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            return []
+
 
 # Global client instance
 _cloud_client: Optional[CloudDatabaseClient] = None

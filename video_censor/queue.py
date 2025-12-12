@@ -47,12 +47,21 @@ class QueueItem:
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     summary: Optional[Dict[str, Any]] = None
+    notified_50: bool = False
+    notified_90: bool = False
+    analysis_path: Optional[Path] = None  # Path to analysis JSON for review step
+    scheduled_time: Optional[datetime] = None # When to auto-start
     
     @property
     def filename(self) -> str:
         """Get the input video filename."""
         return self.input_path.name
     
+    @property
+    def is_scheduled(self) -> bool:
+        """Check if item is scheduled for later."""
+        return self.status == "scheduled"
+
     @property
     def is_pending(self) -> bool:
         """Check if item is pending processing."""
@@ -61,7 +70,12 @@ class QueueItem:
     @property
     def is_processing(self) -> bool:
         """Check if item is currently processing."""
-        return self.status == "processing"
+        return self.status in ("processing", "analyzing", "exporting")
+    
+    @property
+    def is_review_ready(self) -> bool:
+        """Check if item is ready for manual review."""
+        return self.status == "review_ready"
     
     @property
     def is_complete(self) -> bool:
@@ -98,6 +112,13 @@ class QueueItem:
         if stage:
             self.progress_stage = stage
     
+    def mark_review_ready(self, analysis_path: Path) -> None:
+        """Mark item as ready for review."""
+        self.status = "review_ready"
+        self.analysis_path = analysis_path
+        self.progress = 0.5 # Pause at 50%
+        self.progress_stage = "Ready for Review"
+
     def complete(self, summary: Optional[Dict[str, Any]] = None) -> None:
         """Mark the item as completed successfully."""
         self.status = "complete"
@@ -135,11 +156,22 @@ class QueueItem:
         """Get a display string for the current status."""
         if self.status == "pending":
             return "⏳ Pending"
+        elif self.status == "scheduled":
+            time_str = self.scheduled_time.strftime("%I:%M %p") if self.scheduled_time else ""
+            return f"⏰ Scheduled {time_str}"
         elif self.status == "processing":
             pct = int(self.progress * 100)
             if self.progress_stage:
                 return f"◐ {pct}% - {self.progress_stage}"
             return f"◐ {pct}%"
+        elif self.status == "review_ready": # New state
+             return "⚠ Ready for Review"
+        elif self.status == "analyzing": # New state
+             pct = int(self.progress * 100)
+             return f"🔍 Analysis {pct}%"
+        elif self.status == "exporting": # New state
+             pct = int(self.progress * 100)
+             return f"💾 Exporting {pct}%"
         elif self.status == "complete":
             return f"✓ Complete ({self.duration_str})"
         elif self.status == "error":
@@ -158,6 +190,9 @@ class ProcessingQueue:
     
     def __init__(self):
         self._items: list[QueueItem] = []
+        self.on_complete_callback = None  # Function to call when queue finishes
+        self.sleep_when_done = False  # Auto-sleep when queue finishes
+
     
     def add(self, item: QueueItem) -> None:
         """Add an item to the queue."""
@@ -235,6 +270,29 @@ class ProcessingQueue:
         """Check if there are items waiting to be processed."""
         return self.pending_count > 0 or self.processing_count > 0
     
+    def check_all_complete(self) -> None:
+        """Check if all items are finished and trigger callbacks."""
+        if not self.has_pending_work() and len(self._items) > 0:
+            # Trigger callback
+            if self.on_complete_callback:
+                try:
+                    self.on_complete_callback()
+                except Exception as e:
+                    print(f"Error in on_complete_callback: {e}")
+            
+            # Handle sleep
+            if self.sleep_when_done:
+                self._trigger_sleep()
+    
+    def _trigger_sleep(self):
+        """Put computer to sleep (macOS)."""
+        import subprocess
+        try:
+            print("Queue complete - Sleeping computer...")
+            subprocess.run(["pmset", "sleepnow"])
+        except Exception as e:
+            print(f"Failed to sleep computer: {e}")
+    
     def save_state(self, filepath: Optional[Path] = None) -> None:
         """Save queue state to disk for crash recovery."""
         import json
@@ -243,16 +301,18 @@ class ProcessingQueue:
         if filepath is None:
             filepath = Path("/Volumes/20tb/.video_censor_queue.json")
         
-        # Only save pending items (not completed/failed)
-        pending_items = [item for item in self._items if item.is_pending or item.is_processing]
+        # Save pending, processing AND review-ready items
+        items_to_save = [item for item in self._items if item.is_pending or item.is_processing or item.is_review_ready]
         
         state = []
-        for item in pending_items:
+        for item in items_to_save:
             state.append({
                 "id": item.id,
                 "input_path": str(item.input_path),
                 "output_path": str(item.output_path),
                 "profile_name": item.profile_name,
+                "status": item.status, # Persist exact status
+                "analysis_path": str(item.analysis_path) if item.analysis_path else None,
                 "filters": {
                     "filter_language": item.filters.filter_language,
                     "filter_sexual_content": item.filters.filter_sexual_content,
@@ -262,7 +322,8 @@ class ProcessingQueue:
                     "filter_mature_themes": item.filters.filter_mature_themes,
                     "custom_block_phrases": item.filters.custom_block_phrases,
                     "safe_cover_enabled": item.filters.safe_cover_enabled,
-                }
+                },
+                "scheduled_time": item.scheduled_time.isoformat() if item.scheduled_time else None
             })
         
         try:
@@ -299,18 +360,40 @@ class ProcessingQueue:
                     safe_cover_enabled=item_data["filters"].get("safe_cover_enabled", False),
                 )
                 
+                
+
+                
+                start_time_iso = item_data.get("scheduled_time")
+                start_time = datetime.fromisoformat(start_time_iso) if start_time_iso else None
+                
+                # Restore status if available, otherwise infer
+                status = item_data.get("status", "pending")
+                if "status" not in item_data:
+                    # Backward compatibility for old saves
+                    status = "scheduled" if start_time else "pending"
+                
+                analysis_path = item_data.get("analysis_path")
+                
                 item = QueueItem(
                     id=item_data["id"],
                     input_path=Path(item_data["input_path"]),
                     output_path=Path(item_data["output_path"]),
                     profile_name=item_data.get("profile_name", "Default"),
                     filters=filters,
+                    scheduled_time=start_time,
+                    status=status,
+                    analysis_path=Path(analysis_path) if analysis_path else None
                 )
+                
+                # If restoring in review state, trigger ready logic
+                if item.is_review_ready:
+                    item.progress = 0.5
+                    item.progress_stage = "Ready for Review"
                 self._items.append(item)
                 count += 1
             
-            # Clear the file after loading
-            filepath.unlink()
+            # Clear the file after loading -> REMOVED to allow crash recovery
+            # filepath.unlink() 
             return count
             
         except Exception as e:

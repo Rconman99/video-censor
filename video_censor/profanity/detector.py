@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import List, Set, Dict, Optional, Tuple
 
 from ..audio.transcriber import WordTimestamp
-from ..editing.intervals import TimeInterval
+from ..audio.transcriber import WordTimestamp
+from ..editing.intervals import TimeInterval, Action, MatchSource
 
 logger = logging.getLogger(__name__)
 
@@ -453,3 +454,85 @@ def analyze_transcript_for_profanity(
                f"{stats['phrase_detections']} phrases = {stats['total_detections']} total")
     
     return all_intervals, stats
+
+
+def analyze_subtitles_for_profanity(
+    intervals: List[TimeInterval],
+    profanity_list: Set[str],
+    phrases: List[List[str]],
+    buffer_before: float = 0.0,
+    buffer_after: float = 0.0
+) -> Tuple[List[TimeInterval], Dict]:
+    """
+    Analyze subtitle intervals for profanity.
+    
+    Unlike audio alignment where we have per-word timestamps, for subtitles
+    we only have the block timestamp. If profanity is found, we mask the
+    entire block (plus buffer).
+    
+    Args:
+        intervals: List of TimeInterval objects parsed from SRT
+        profanity_list: Set of profanity words
+        phrases: List of profanity phrases
+        buffer_before: Buffer before
+        buffer_after: Buffer after
+        
+    Returns:
+        Tuple of (censored_intervals, stats)
+    """
+    censored_intervals = []
+    normalized_profanity = {w.lower() for w in profanity_list}
+    
+    count_detected = 0
+    
+    for interval in intervals:
+        text = interval.metadata.get('text', '')
+        if not text:
+            continue
+            
+        # Simple tokenization for matching
+        # Note: This loses some context but is decent for v1
+        words_in_sub = re.findall(r'\b\w+\b', text)
+        
+        found = False
+        matched_term = ""
+        
+        # Check single words
+        for word in words_in_sub:
+            match = word_matches_profanity(word, normalized_profanity)
+            if match:
+                found = True
+                matched_term = f"{match[0]} ({match[1]})"
+                break
+                
+        # Check phrases (simple robust check)
+        if not found and phrases:
+            text_lower = text.lower()
+            for phrase in phrases:
+                phrase_str = " ".join(phrase).lower()
+                if phrase_str in text_lower:
+                    found = True
+                    matched_term = f"phrase: {phrase_str}"
+                    break
+        
+        if found:
+            count_detected += 1
+            # Create censor block covering the whole subtitle
+            censor_int = TimeInterval(
+                start=max(0, interval.start - buffer_before),
+                end=interval.end + buffer_after,
+                reason=f"subtitle profanity: {matched_term}",
+                action=Action.MUTE, # Detector creates the interval, default to MUTE
+                source=MatchSource.SUBTITLE,
+                metadata=interval.metadata
+            )
+            censored_intervals.append(censor_int)
+            
+    stats = {
+        "total_subtitles": len(intervals),
+        "detections": count_detected
+    }
+    
+    logger.info(f"Subtitle analysis: {count_detected}/{len(intervals)} blocks flagged")
+    
+    return censored_intervals, stats

@@ -6,7 +6,14 @@ for the Video Censor parental control system.
 """
 
 from dataclasses import dataclass, field, asdict
+from enum import Enum
 from typing import List, Optional
+
+# Import Action from intervals (circular import avoidance might be needed, 
+# but preferences usually is independent. If intervals is low level, we might drag in 
+# dependencies. Let's define the strings here or use strings directly to avoid coupling.)
+# For preferences, strings are safer for JSON serialization.
+
 
 
 @dataclass
@@ -30,7 +37,14 @@ class ContentFilterSettings:
         custom_block_phrases: User-defined words/sentences to mute or cut
         safe_cover_enabled: Generate a kid-friendly cover image for media players
         force_english_subtitles: Extract and burn English subtitles into video
+
         censor_subtitle_profanity: Replace profanity in subtitles with [...]
+        
+        # Actions (cut, mute, beep, blur, none)
+        profanity_action: Action to take for profanity (default: mute)
+        nudity_action: Action to take for nudity (default: cut)
+        sexual_content_action: Action to take for sexual content (default: cut)
+        violence_action: Action to take for violence (default: cut)
     """
     filter_language: bool = True
     filter_sexual_content: bool = True
@@ -41,7 +55,14 @@ class ContentFilterSettings:
     custom_block_phrases: List[str] = field(default_factory=list)
     safe_cover_enabled: bool = False
     force_english_subtitles: bool = False
+
     censor_subtitle_profanity: bool = True
+    
+    # Default Actions
+    profanity_action: str = "mute"
+    nudity_action: str = "cut"
+    sexual_content_action: str = "cut"
+    violence_action: str = "cut"
     
     def __post_init__(self):
         """Validate romance and violence levels are in valid range."""
@@ -68,7 +89,13 @@ class ContentFilterSettings:
             'custom_block_phrases',
             'safe_cover_enabled',
             'force_english_subtitles',
-            'censor_subtitle_profanity'
+
+
+            'censor_subtitle_profanity',
+            'profanity_action',
+            'nudity_action',
+            'sexual_content_action',
+            'violence_action'
         }
         filtered_data = {k: v for k, v in data.items() if k in valid_fields}
         return cls(**filtered_data)
@@ -85,21 +112,26 @@ class ContentFilterSettings:
             custom_block_phrases=list(self.custom_block_phrases),
             safe_cover_enabled=self.safe_cover_enabled,
             force_english_subtitles=self.force_english_subtitles,
-            censor_subtitle_profanity=self.censor_subtitle_profanity
+
+            censor_subtitle_profanity=self.censor_subtitle_profanity,
+            profanity_action=self.profanity_action,
+            nudity_action=self.nudity_action,
+            sexual_content_action=self.sexual_content_action,
+            violence_action=self.violence_action
         )
     
     def summary(self) -> str:
         """Generate a human-readable summary of active filters."""
         parts = []
         if self.filter_language:
-            parts.append("Language ✓")
+            parts.append(f"Language ({self.profanity_action})")
         if self.filter_sexual_content:
-            parts.append("Sexual ✓")
+            parts.append(f"Sexual ({self.sexual_content_action})")
         if self.filter_nudity:
-            parts.append("Nudity ✓")
+            parts.append(f"Nudity ({self.nudity_action})")
         parts.append(f"Romance: {self.filter_romance_level}")
         if self.filter_violence_level > 0:
-            parts.append(f"Violence: {self.filter_violence_level}")
+            parts.append(f"Violence: {self.filter_violence_level} ({self.violence_action})")
         if self.filter_mature_themes:
             parts.append("Mature ✓")
         if self.custom_block_phrases:

@@ -235,12 +235,16 @@ def render_with_cuts_and_mutes(
             logger.warning(f"Failed to cleanup temp dir: {e}")
 
 
-def _get_hardware_encoder_args(config: Config) -> Optional[List[str]]:
+def _get_hardware_encoder_args(config: Config, prefer_hevc: bool = True) -> Optional[List[str]]:
     """
     Get ffmpeg arguments for hardware encoding if available/configured.
     
+    Args:
+        config: Configuration object
+        prefer_hevc: Use HEVC/H.265 encoder (better for HDR, faster on recent hardware)
+    
     Returns:
-        List of ffmpeg args (e.g. ['-c:v', 'h264_videotoolbox', ...]) or None
+        List of ffmpeg args or None if hardware encoding disabled/unavailable
     """
     strategy = config.output.hardware_acceleration
     if strategy == "off":
@@ -248,24 +252,25 @@ def _get_hardware_encoder_args(config: Config) -> Optional[List[str]]:
         
     # Check for macOS VideoToolbox
     if strategy in ["auto", "videotoolbox"] and sys.platform == "darwin":
-        # We assume availability on macOS (or could run a check)
-        # Check if ffmpeg supports it (user command did, so we assume yes)
-        args = [
-            '-c:v', 'h264_videotoolbox',
-            '-allow_sw', '1',  # Allow software fallback within the encoder
-            '-realtime', '0'   # High quality offline encoding
-        ]
+        # Choose codec based on preference
+        if prefer_hevc:
+            # HEVC VideoToolbox - better for HDR content, faster on M1+
+            args = [
+                '-c:v', 'hevc_videotoolbox',
+                '-allow_sw', '1',      # Allow software fallback if needed
+                '-realtime', '0',      # High quality offline encoding
+                '-q:v', '65',          # Quality-based (0-100, higher = better)
+            ]
+        else:
+            # H.264 VideoToolbox - maximum compatibility
+            args = [
+                '-c:v', 'h264_videotoolbox',
+                '-allow_sw', '1',
+                '-realtime', '0',
+                '-q:v', '70',
+            ]
         
-        # Map bitrate
-        # If output.video_bitrate is not explicitly set in config, we might need to derive it
-        # But here we are often extracting segments.
-        # Ideally we match input bitrate or use a high constant quality.
-        # VideoToolbox uses -q:v for quality (0-100), roughly analogous to CRF but inverted?
-        # Actually -q:v 50 is distinct.
-        # For simplicity, let's use a decent bitrate target or quality.
-        # Let's try to maintain high quality.
-        
-        args.extend(['-b:v', '6000k']) # Default high-ish bitrate for transparency
+        logger.info(f"Using {'HEVC' if prefer_hevc else 'H.264'} VideoToolbox hardware encoder")
         return args
 
     return None
@@ -278,15 +283,16 @@ def extract_segment(
     end: float,
     audio_edits: List[AudioEdit],
     config: Config,
-    total_duration: Optional[float] = None
+    total_duration: Optional[float] = None,
+    force_copy: bool = False
 ) -> None:
     """
     Extract a segment from the video with audio edits applied.
     
-    Uses smart rendering:
-    - If Hardware Acceleration available: Re-encode video (accurate cuts, fast)
-    - If Audio Edits Only: Stream copy video (if no HW accel), re-encode audio
-    - Else: Stream copy both
+    SMART RENDERING LOGIC:
+    1. NO edits + NO scaling → Stream copy everything (FASTEST, ~50x)
+    2. Audio edits only → Copy video, re-encode audio only
+    3. Quality scaling → Re-encode both (hardware accelerated if available)
     
     Args:
         input_path: Input video path
@@ -295,28 +301,16 @@ def extract_segment(
         end: End time in seconds
         audio_edits: Audio edits to apply (in segment-local time)
         config: Configuration settings
+        force_copy: Force stream copy mode (ignore quality settings)
     """
     duration = end - start
     
-    # Check for hardware encoder
-    hw_args = _get_hardware_encoder_args(config)
+    # Determine quality/scaling requirements
+    quality_args = get_quality_args(config, total_duration) if not force_copy else []
+    must_reencode_video = bool(quality_args)
+    has_audio_edits = bool(audio_edits)
     
-    # Build audio filter
-    if audio_edits:
-        audio_filter = build_audio_filter(
-            audio_edits,
-            beep_frequency=config.profanity.beep_frequency_hz,
-            beep_volume=config.profanity.beep_volume
-        )
-        audio_args = [
-            '-c:a', config.output.audio_codec,
-            '-b:a', config.output.audio_bitrate,
-            '-af', audio_filter
-        ]
-    else:
-        # Copy audio if no edits
-        audio_args = ['-c:a', 'copy']
-    
+    # Common input args
     common_args = [
         '-y',
         '-ss', str(start),
@@ -324,42 +318,59 @@ def extract_segment(
         '-t', str(duration)
     ]
     
-    quality_args = get_quality_args(config, total_duration)
-    
-    # If quality args exist, we MUST re-encode (cannot copy)
-    must_reencode = bool(quality_args)
-    
-    if hw_args:
-        # RE-ENCODE VIDEO (Hardware)
-        # This provides Frame-Accurate cuts
-        logger.debug("Using hardware encoder for segment extraction")
-        # quality_args typically contain filters and bitrate; ensure HW encoder accepts them
-        # Note: HW encoders might need specific bitrate flags (e.g. -b:v). get_quality_args returns standard ffmpeg args.
-        # If using videotoolbox, -b:v works.
-        cmd = ['ffmpeg'] + common_args + hw_args + quality_args + audio_args + [str(output_path)]
-    elif audio_edits and not must_reencode:
-        # HAS AUDIO EDITS (Software/Copy fallback)
-        # Stream copy video (fast but cuts at keyframes), re-encode audio
+    # SMART RENDERING: Choose the fastest method
+    if not has_audio_edits and not must_reencode_video:
+        # CASE 1: PURE STREAM COPY (fastest - no encoding at all)
+        cmd = ['ffmpeg'] + common_args + ['-c', 'copy', str(output_path)]
+        method = "stream-copy"
+        
+    elif has_audio_edits and not must_reencode_video:
+        # CASE 2: COPY VIDEO, RE-ENCODE AUDIO ONLY
+        audio_filter = build_audio_filter(
+            audio_edits,
+            beep_frequency=config.profanity.beep_frequency_hz,
+            beep_volume=config.profanity.beep_volume
+        )
         cmd = ['ffmpeg'] + common_args + [
-            '-c:v', 'copy'
-        ] + audio_args + [str(output_path)]
+            '-c:v', 'copy',  # No video re-encoding
+            '-c:a', config.output.audio_codec,
+            '-b:a', config.output.audio_bitrate,
+            '-af', audio_filter,
+            str(output_path)
+        ]
+        method = "copy-video"
+        
     else:
-        # NO EDITS or MUST RE-ENCODE
-        if must_reencode:
-            # Software re-encode with quality args
-            cmd = ['ffmpeg'] + common_args + [
-                 '-c:v', config.output.video_codec,
-                 '-preset', 'medium' # Default speed
-            ] + quality_args + audio_args + [str(output_path)]
+        # CASE 3: RE-ENCODE (quality scaling or hardware acceleration)
+        hw_args = _get_hardware_encoder_args(config)
+        
+        # Audio args
+        if has_audio_edits:
+            audio_filter = build_audio_filter(
+                audio_edits,
+                beep_frequency=config.profanity.beep_frequency_hz,
+                beep_volume=config.profanity.beep_volume
+            )
+            audio_args = [
+                '-c:a', config.output.audio_codec,
+                '-b:a', config.output.audio_bitrate,
+                '-af', audio_filter
+            ]
         else:
-            # Stream copy everything
-            cmd = ['ffmpeg'] + common_args + [
-                '-c', 'copy'
-            ] + [str(output_path)]
+            audio_args = ['-c:a', 'copy']
+        
+        # Video args
+        if hw_args:
+            video_args = hw_args + quality_args
+            method = "hw-encode"
+        else:
+            video_args = ['-c:v', config.output.video_codec, '-preset', 'fast'] + quality_args
+            method = "sw-encode"
+        
+        cmd = ['ffmpeg'] + common_args + video_args + audio_args + [str(output_path)]
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        method = "hw-encode" if hw_args else ("re-encode" if must_reencode else ("copy-video" if audio_edits else "copy-all"))
         logger.debug(f"Extracted segment: {start:.2f}s - {end:.2f}s ({method})")
     except subprocess.CalledProcessError as e:
         logger.error(f"Segment extraction failed: {e.stderr}")
@@ -395,6 +406,7 @@ def concat_segments(
         '-f', 'concat',
         '-safe', '0',
         '-i', str(list_path),
+        '-fflags', '+genpts',  # Regenerate timestamps to fix discontinuities
         '-c', 'copy',  # No re-encoding needed
         str(output_path)
     ]

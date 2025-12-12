@@ -7,9 +7,30 @@ This is critical to prevent stuttering playback from many small edits.
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+
+class Action(str, Enum):
+    """Action to take for a censored segment."""
+    CUT = "cut"
+    MUTE = "mute"
+    BEEP = "beep"
+    BLUR = "blur"
+    NONE = "none"
+
+
+class MatchSource(str, Enum):
+    """Source of the detection."""
+    AUDIO = "audio"      # From Whisper transcript
+    VISUAL = "visual"    # From Nudity/Violence detector
+    SUBTITLE = "subtitle" # From subtitle file
+    MANUAL = "manual"    # User manually added
+    UNKNOWN = "unknown"
+
 
 
 @dataclass
@@ -18,13 +39,17 @@ class TimeInterval:
     start: float  # seconds
     end: float    # seconds
     reason: str = ""  # Why this interval was marked
+    action: Action = Action.CUT  # Default action
+    source: MatchSource = MatchSource.UNKNOWN
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
     
     @property
     def duration(self) -> float:
         return self.end - self.start
     
     def __repr__(self) -> str:
-        return f"TimeInterval({self.start:.2f}-{self.end:.2f}s)"
+        return f"TimeInterval({self.start:.2f}-{self.end:.2f}s, {self.action.value}, {self.reason})"
     
     def __lt__(self, other: "TimeInterval") -> bool:
         return self.start < other.start
@@ -50,10 +75,17 @@ class TimeInterval:
         if other.reason and other.reason not in reasons:
             reasons.append(other.reason)
             
+        # Determine merged action - CUT overrides MUTE/BEEP
+        merged_action = self.action
+        if Action.CUT in (self.action, other.action):
+            merged_action = Action.CUT
+            
         return TimeInterval(
             start=min(self.start, other.start),
             end=max(self.end, other.end),
-            reason="; ".join(reasons) if reasons else ""
+            reason="; ".join(reasons) if reasons else "",
+            action=merged_action,
+            source=self.source # Keep primary source of left interval
         )
     
     def contains(self, time: float) -> bool:

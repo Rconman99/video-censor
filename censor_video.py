@@ -19,9 +19,10 @@ import sys
 import time
 import tempfile
 import shutil
+import json # Added because used in main for save_summary
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 # Add parent to path for development
 sys.path.insert(0, str(Path(__file__).parent))
@@ -29,14 +30,19 @@ sys.path.insert(0, str(Path(__file__).parent))
 from video_censor.config import Config
 from video_censor.validator import validate_input, validate_output_path, VideoInfo
 from video_censor.audio import extract_audio, transcribe_audio
-from video_censor.profanity import load_profanity_list, load_profanity_phrases, detect_profanity, detect_profanity_phrases
+from video_censor.profanity import (
+    load_profanity_list, load_profanity_phrases, detect_profanity, 
+    detect_profanity_phrases, analyze_subtitles_for_profanity
+)
 from video_censor.nudity import extract_frames, detect_nudity
 from video_censor.sexual_content import detect_sexual_content, load_sexual_terms, load_sexual_phrases
 from video_censor.violence import detect_violence
 from video_censor.editing import merge_intervals, plan_edits, render_censored_video
 from video_censor.reporting import generate_summary, print_summary, save_edit_timeline
 from video_censor.preferences import ContentFilterSettings
+from video_censor.preferences import ContentFilterSettings
 from video_censor.subtitles import extract_english_subtitles, censor_subtitle_file, has_english_subtitles
+from video_censor.subtitles.parser import parse_srt
 
 logger = logging.getLogger(__name__)
 
@@ -157,8 +163,39 @@ Examples:
         default=None,
         help="Directory for temporary files"
     )
+
+    # Workflow arguments for GUI integration
+    parser.add_argument(
+        "--analyze-only",
+        action="store_true",
+        help="Run analysis only and exit (skips rendering)"
+    )
+
+    parser.add_argument(
+        "--export-intervals",
+        type=Path,
+        default=None,
+        help="Save detected intervals to JSON file"
+    )
+
+    parser.add_argument(
+        "--import-intervals",
+        type=Path,
+        default=None,
+        help="Load intervals from JSON file (skips detection)"
+    )
+
+    parser.add_argument(
+        "--subtitles",
+        type=Path,
+        default=None,
+        help="Path to SRT subtitle file to skip transcription"
+    )
     
     return parser.parse_args()
+
+
+
 
 
 def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
@@ -185,7 +222,7 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
     )
 
 
-def _analyze_audio(input_path: Path, temp_dir: Path, config: Config):
+def _analyze_audio(input_path: Path, temp_dir: Path, config: Config, subtitles_path: Optional[Path] = None):
     """
     Audio analysis pipeline (Step 1).
     
@@ -197,7 +234,33 @@ def _analyze_audio(input_path: Path, temp_dir: Path, config: Config):
     logger.info("=" * 50)
     logger.info("STEP 1: Profanity Detection")
     logger.info("=" * 50)
+
+    words = []
+    profanity_intervals = []
+
+    if subtitles_path and subtitles_path.exists():
+        logger.info(f"📄 Using subtitles for profanity check: {subtitles_path.name}")
+        logger.info("   -> Skipping audio extraction & transcription (saving ~30 mins)")
+        
+        try:
+            srt_intervals = parse_srt(subtitles_path)
+            logger.info(f"   -> Parsed {len(srt_intervals)} subtitle blocks")
+            
+            profanity_list = load_profanity_list(config.profanity.custom_wordlist_path)
+            phrases = load_profanity_phrases(config.profanity.custom_phrases_path)
+            
+            profanity_intervals, _ = analyze_subtitles_for_profanity(
+                srt_intervals, profanity_list, phrases,
+                buffer_before=config.profanity.buffer_before,
+                buffer_after=config.profanity.buffer_after
+            )
+            logger.info(f"Found {len(profanity_intervals)} profanity instances from subtitles")
+            return profanity_intervals, words # words will be empty if using subtitles
+        except Exception as e:
+            logger.error(f"Failed to parse subtitles: {e}. Falling back to audio transcription.")
+            # Fallthrough to normal audio processing
     
+    # Normal Flow: Extract & Transcribe
     # Extract audio
     audio_path = extract_audio(
         input_path,
@@ -278,230 +341,348 @@ def _analyze_video(input_path: Path, temp_dir: Path, config: Config, show_progre
     return nudity_intervals, frames
 
 
+def analyze_content(
+    input_path: Path,
+    video_info: VideoInfo,
+    config: Config,
+    temp_dir: Path,
+    filter_settings: Optional[ContentFilterSettings] = None,
+    show_progress: bool = True,
+    subtitles_path: Optional[Path] = None
+) -> dict:
+    """
+    Run local content analysis (Audio, Video, Subtitles).
+    
+    Returns a dictionary containing lists of detected intervals.
+    """
+    # Derive flags
+    skip_profanity = False
+    skip_nudity = False
+    skip_sexual_content = False
+    violence_level = 0
+    
+    if filter_settings:
+        skip_profanity = not filter_settings.filter_language
+        skip_nudity = not filter_settings.filter_nudity
+        skip_sexual_content = not filter_settings.filter_sexual_content
+        violence_level = filter_settings.filter_violence_level
+        
+    logger.info("Starting local content analysis...")
+    
+    profanity_intervals = []
+    nudity_intervals = []
+    sexual_content_intervals = []
+    violence_intervals = []
+    frames = []
+    words = []
+    
+    # Run Step 1 (Audio) and Step 2 (Video) in parallel
+    run_audio = not skip_profanity and video_info.has_audio
+    run_video = not skip_nudity
+    
+    futures = {}
+    
+    # Determine max workers based on performance mode
+    max_workers = 3
+    if config.system.performance_mode == "low_power":
+        max_workers = 1
+        logger.info("Low Power Mode: Using serial execution (max_workers=1)")
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor: # Increased workers for subtitles
+        if run_audio:
+            futures['audio'] = executor.submit(
+                _analyze_audio, input_path, temp_dir, config, subtitles_path
+            )
+            
+        if run_video:
+            futures['video'] = executor.submit(
+                _analyze_video, input_path, temp_dir, config, show_progress
+            )
+            
+        # Subtitle Analysis (Parallel)
+        subtitle_path = None
+        if filter_settings and filter_settings.force_english_subtitles:
+             # Check if we can/should extract subtitles for analysis
+             # Note: We extract to a specific filename for consistency
+             sub_extract_path = temp_dir / "analysis_subtitles.srt"
+             futures['subtitles'] = executor.submit(
+                 extract_english_subtitles, input_path, sub_extract_path
+             )
+
+        # Collect results
+        for name, future in futures.items():
+            try:
+                result = future.result()
+                if name == 'audio':
+                    profanity_intervals, words = result
+                elif name == 'video':
+                    nudity_intervals, frames = result
+                elif name == 'subtitles':
+                    subtitle_path = result
+            except Exception as e:
+                logger.error(f"Error in {name} analysis: {e}")
+                # Don't crash entire pipeline for one failure, unless critical?
+                # For now, log and continue. Audio/Video are critical though.
+                if name in ('audio', 'video') and not (skip_profanity and skip_nudity):
+                     raise
+
+    # Process Subtitles if extracted
+    if subtitle_path and subtitle_path.exists():
+        logger.info("Analyzing subtitles for profanity...")
+        try:
+            sub_intervals = parse_srt(subtitle_path)
+            profanity_list = load_profanity_list(config.profanity.custom_wordlist_path)
+            phrases = load_profanity_phrases(config.profanity.custom_phrases_path)
+            
+            sub_censored, stats = analyze_subtitles_for_profanity(
+                sub_intervals, profanity_list, phrases,
+                buffer_before=config.profanity.buffer_before, # Use same buffer?
+                buffer_after=config.profanity.buffer_after
+            )
+            
+            # Merge with audio profanity
+            # Note: This might duplicate detections if both Whisper and Subtitles catch it.
+            # The 'plan_edits' function handles overlapping intervals, so it's safe!
+            logger.info(f"Adding {len(sub_censored)} subtitle profanity intervals")
+            profanity_intervals.extend(sub_censored)
+            
+        except Exception as e:
+            logger.error(f"Subtitle analysis failed: {e}")
+
+    # Step 2.5: Sexual Content
+    if not skip_sexual_content and config.sexual_content.enabled and words:
+        logger.info("STEP 2.5: Sexual Content Detection")
+        sexual_terms = load_sexual_terms(config.sexual_content.custom_terms_path)
+        sexual_phrases = load_sexual_phrases(config.sexual_content.custom_phrases_path)
+        
+        sexual_content_intervals = detect_sexual_content(
+            words,
+            terms=sexual_terms,
+            phrases=sexual_phrases,
+            threshold=config.sexual_content.threshold,
+            unsafe_threshold=config.sexual_content.unsafe_threshold,
+            merge_gap=config.sexual_content.merge_gap,
+            buffer_before=config.sexual_content.buffer_before,
+            buffer_after=config.sexual_content.buffer_after,
+            debug=config.sexual_content.debug
+        )
+        logger.info(f"Found {len(sexual_content_intervals)} sexual content intervals")
+        
+    # Step 2.7: Violence Detection
+    if violence_level > 0:
+        logger.info(f"STEP 2.7: Violence Detection (Level {violence_level})")
+        if not frames and run_video: # If we didn't run video logic but need frames? 
+             # Wait, if run_video is false, frames is empty.
+             # If run_video is true, frames is populated.
+             pass
+        
+        if not frames:
+             # Extract frames if we skipped nudity but want violence
+             frames_dir = temp_dir / "frames"
+             frames = extract_frames(
+                input_path,
+                interval=config.nudity.frame_interval,
+                output_dir=frames_dir
+             )
+             
+        frame_paths = [(frame['timestamp'], Path(frame['path'])) for frame in frames]
+        violence_intervals = detect_violence(
+            frame_paths,
+            level=violence_level,
+            show_progress=show_progress
+        )
+        logger.info(f"Found {len(violence_intervals)} violence intervals")
+
+    return {
+        'profanity': profanity_intervals,
+        'nudity': nudity_intervals,
+        'sexual_content': sexual_content_intervals,
+        'violence': violence_intervals
+    }
+
+
 def process_video(
     input_path: Path,
     output_path: Path,
     config: Config,
-
     video_info: VideoInfo,
-    skip_profanity: bool = False,
-    skip_nudity: bool = False,
-    skip_sexual_content: bool = False,
+    filter_settings: ContentFilterSettings,
+    import_intervals_path: Optional[Path] = None,
+    export_intervals_path: Optional[Path] = None,
+    analyze_only: bool = False,
+    subtitles_path: Optional[Path] = None,
     show_progress: bool = True,
-    filter_settings: "Optional[ContentFilterSettings]" = None,
-    temp_dir_root: Optional[Path] = None,
-    use_cloud_cache: bool = True  # New: Check cloud for cached timestamps
-) -> None:
+    temp_dir_root: Optional[Path] = None
+) -> Dict[str, Any]:
     """
     Main processing pipeline.
     
-    Args:
-        input_path: Input video path
-        output_path: Output video path
-        config: Configuration settings
-        video_info: Validated video information
-        skip_profanity: Skip profanity detection (overridden by filter_settings)
-        skip_nudity: Skip nudity detection (overridden by filter_settings)
-        skip_sexual_content: Skip sexual content detection (overridden by filter_settings)
-        show_progress: Show progress indicators
-        filter_settings: Optional ContentFilterSettings to control what gets filtered
-        temp_dir_root: Optional directory for temporary files
-        use_cloud_cache: Check cloud database for cached timestamps (default: True)
+    1. Validate input
+    2. Check cloud cache
+    3. Analyze content (Profanity, Nudity, etc)
+    4. Render censored video
     """
-    # If filter_settings provided, derive skip flags from it
+    # ... (skip derived flags logic for now, it's fine) ...
     violence_level = 0
     if filter_settings is not None:
         skip_profanity = not filter_settings.filter_language
         skip_nudity = not filter_settings.filter_nudity
         skip_sexual_content = not filter_settings.filter_sexual_content
         violence_level = filter_settings.filter_violence_level
-        # Note: filter_romance_level and filter_mature_themes are for future use
     
     start_time = time.time()
     
-    # Cloud cache lookup - check if we already have timestamps for this video
-    cloud_result = None
-    cloud_fingerprint = None
-    used_cloud_cache = False
-    
-    if use_cloud_cache:
-        try:
-            from video_censor.cloud_db import get_cloud_client, VideoFingerprint, DetectionResult
-            cloud_client = get_cloud_client()
+    # helper to apply performance overrides
+    if config.system.performance_mode == "low_power":
+        logger.info("⚡ Low Power Mode Enabled: Optimizing for limited resources")
+        
+        # 1. Downgrade Whisper model if using heavy default
+        if config.whisper.model_size == "large-v3":
+            logger.info("  -> Switched Whisper model from 'large-v3' to 'small'")
+            config.whisper.model_size = "small"
             
-            if cloud_client.is_available:
-                logger.info("Checking cloud database for cached timestamps...")
-                cloud_fingerprint = cloud_client.compute_fingerprint(
-                    str(input_path), 
-                    video_info.duration
-                )
-                
-                if cloud_fingerprint:
-                    cloud_result = cloud_client.lookup_video(cloud_fingerprint)
-                    
-                    if cloud_result:
-                        logger.info(f"🚀 FOUND CACHED TIMESTAMPS for: {cloud_result.title}")
-                        logger.info(f"   Profanity segments: {len(cloud_result.profanity_segments)}")
-                        logger.info(f"   Nudity segments: {len(cloud_result.nudity_segments)}")
-                        logger.info(f"   Sexual content: {len(cloud_result.sexual_content_segments)}")
-                        logger.info(f"   Original processing time: {cloud_result.processing_time_seconds:.1f}s")
-                        logger.info("   Skipping detection, using cached data!")
-                        used_cloud_cache = True
-                    else:
-                        logger.info("No cached timestamps found, running full detection...")
-        except Exception as e:
-            logger.debug(f"Cloud cache lookup failed (continuing with local detection): {e}")
+        # 2. Reduce Nudity Detection frame rate
+        if config.nudity.frame_interval < 0.5:
+            logger.info(f"  -> Increased frame interval from {config.nudity.frame_interval}s to 0.5s")
+            config.nudity.frame_interval = 0.5
+
     
-    # Create temp dir in specified location or default
+    # Create temp dir
     if temp_dir_root:
         temp_dir_root.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix="video_censor_", dir=temp_dir_root))
     
+    profanity_intervals = []
+    nudity_intervals = []
+    sexual_content_intervals = []
+    violence_intervals = []
+    
+    used_cloud_cache = False
+    cloud_fingerprint = None
+    
     try:
-        profanity_intervals = []
-        nudity_intervals = []
-        sexual_content_intervals = []
-        violence_intervals = []
-        frames = []  # Store extracted frames for reuse
-        words = []  # Store for sexual content detection
-        
-        # If we have cached cloud data, use it and skip detection
-        if used_cloud_cache and cloud_result:
-            logger.info("=" * 50)
-            logger.info("USING CACHED CLOUD TIMESTAMPS - SKIPPING DETECTION!")
-            logger.info("=" * 50)
+        # Check if importing intervals (Skip detection)
+        if import_intervals_path and import_intervals_path.exists():
+            logger.info(f"Importing intervals from {import_intervals_path}")
+            import json
+            from video_censor.editing.intervals import TimeInterval, Action, MatchSource
             
-            # Convert cached data to interval format
-            from video_censor.editing.intervals import TimeInterval
+            with open(import_intervals_path, 'r') as f:
+                data = json.load(f)
+                
+            def _dict_to_interval(d):
+                # Handle enums
+                if 'action' in d: d['action'] = Action(d['action'])
+                if 'source' in d: d['source'] = MatchSource(d['source'])
+                
+                # Filter keys to only those accepted by TimeInterval
+                valid_keys = {'start', 'end', 'reason', 'action', 'source', 'metadata'}
+                filtered_d = {k: v for k, v in d.items() if k in valid_keys}
+                
+                return TimeInterval(**filtered_d)
+                
+            profanity_intervals = [_dict_to_interval(d) for d in data.get('profanity', [])]
+            nudity_intervals = [_dict_to_interval(d) for d in data.get('nudity', [])]
+            sexual_content_intervals = [_dict_to_interval(d) for d in data.get('sexual_content', [])]
+            violence_intervals = [_dict_to_interval(d) for d in data.get('violence', [])]
             
-            # Profanity intervals from cloud
-            for seg in cloud_result.profanity_segments:
-                profanity_intervals.append(TimeInterval(
-                    start=seg.get('start', 0),
-                    end=seg.get('end', 0),
-                    reason=seg.get('word', 'profanity')
-                ))
+            logger.info("Intervals loaded successfully.")
             
-            # Nudity intervals from cloud
-            for seg in cloud_result.nudity_segments:
-                nudity_intervals.append(TimeInterval(
-                    start=seg.get('start', 0),
-                    end=seg.get('end', 0),
-                    reason='nudity'
-                ))
-            
-            # Sexual content intervals from cloud
-            for seg in cloud_result.sexual_content_segments:
-                sexual_content_intervals.append(TimeInterval(
-                    start=seg.get('start', 0),
-                    end=seg.get('end', 0),
-                    reason='sexual_content'
-                ))
-            
-            logger.info(f"Loaded {len(profanity_intervals)} profanity, {len(nudity_intervals)} nudity, {len(sexual_content_intervals)} sexual content intervals")
         else:
-            # Run detection locally
+            # Cloud cache lookup (only if not importing)
+            cloud_result = None
+            cloud_fingerprint = None
+            used_cloud_cache = False
             
-            # Run Step 1 (Audio) and Step 2 (Video) in parallel
-            run_audio = not skip_profanity and video_info.has_audio
-            run_video = not skip_nudity
-            
-            futures = {}
-            
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                if run_audio:
-                    futures['audio'] = executor.submit(
-                        _analyze_audio, input_path, temp_dir, config
-                    )
-                else:
-                    if skip_profanity:
-                        logger.info("Skipping profanity detection (--no-profanity)")
-                    elif not video_info.has_audio:
-                        logger.info("Skipping profanity detection (no audio track)")
+            if use_cloud_cache:
+                # ... (cloud logic omitted for brevity, assuming existing logic flow) ...
+                try:
+                    from video_censor.cloud_db import get_cloud_client
+                    cloud_client = get_cloud_client()
+                    if cloud_client.is_available:
+                        cloud_fingerprint = cloud_client.compute_fingerprint(str(input_path), video_info.duration)
+                        if cloud_fingerprint:
+                            cloud_result = cloud_client.lookup_video(cloud_fingerprint)
+                            if cloud_result:
+                                used_cloud_cache = True
+                except Exception:
+                    pass
+
+            if used_cloud_cache and cloud_result:
+                logger.info("=" * 50)
+                logger.info("USING CACHED CLOUD TIMESTAMPS - SKIPPING DETECTION!")
+                logger.info("=" * 50)
                 
-                if run_video:
-                    futures['video'] = executor.submit(
-                        _analyze_video, input_path, temp_dir, config, show_progress
-                    )
-                else:
-                    logger.info("Skipping nudity detection (--no-nudity)")
+                # Convert cached data to interval format
+                from video_censor.editing.intervals import TimeInterval
                 
-                # Collect results as they complete
-                for name, future in futures.items():
-                    try:
-                        result = future.result()
-                        if name == 'audio':
-                            profanity_intervals, words = result
-                        elif name == 'video':
-                            nudity_intervals, frames = result
-                    except Exception as e:
-                        logger.error(f"Error in {name} analysis: {e}")
-                        raise
-        
-        # Step 2.5: Sexual content detection (dialog-based)
-        if not skip_sexual_content and config.sexual_content.enabled and words:
-            logger.info("=" * 50)
-            logger.info("STEP 2.5: Sexual Content Detection")
-            logger.info("=" * 50)
+                # Profanity intervals from cloud
+                for seg in cloud_result.profanity_segments:
+                    profanity_intervals.append(TimeInterval(
+                        start=seg.get('start', 0),
+                        end=seg.get('end', 0),
+                        reason=seg.get('word', 'profanity')
+                    ))
+                
+                # Nudity intervals from cloud
+                for seg in cloud_result.nudity_segments:
+                    nudity_intervals.append(TimeInterval(
+                        start=seg.get('start', 0),
+                        end=seg.get('end', 0),
+                        reason='nudity'
+                    ))
+                
+                # Sexual content intervals from cloud
+                for seg in cloud_result.sexual_content_segments:
+                    sexual_content_intervals.append(TimeInterval(
+                        start=seg.get('start', 0),
+                        end=seg.get('end', 0),
+                        reason='sexual_content'
+                    ))
+                
+                logger.info(f"Loaded {len(profanity_intervals)} profanity, {len(nudity_intervals)} nudity, {len(sexual_content_intervals)} sexual content intervals")
             
-            # Load terms and phrases
-            sexual_terms = load_sexual_terms(config.sexual_content.custom_terms_path)
-            sexual_phrases = load_sexual_phrases(config.sexual_content.custom_phrases_path)
-            
-            # Detect sexual content from transcript
-            sexual_content_intervals = detect_sexual_content(
-                words,
-                terms=sexual_terms,
-                phrases=sexual_phrases,
-                threshold=config.sexual_content.threshold,
-                unsafe_threshold=config.sexual_content.unsafe_threshold,
-                merge_gap=config.sexual_content.merge_gap,
-                buffer_before=config.sexual_content.buffer_before,
-                buffer_after=config.sexual_content.buffer_after,
-                debug=config.sexual_content.debug
-            )
-            
-            logger.info(f"Found {len(sexual_content_intervals)} sexual content intervals to cut")
-        elif skip_sexual_content:
-            logger.info("Skipping sexual content detection (filter disabled)")
-        elif not words:
-            logger.info("Skipping sexual content detection (no transcript available)")
-        elif not config.sexual_content.enabled:
-            logger.info("Skipping sexual content detection (disabled in config)")
-        
-        # Step 2.7: Violence detection
-        if violence_level > 0:
-            logger.info("=" * 50)
-            logger.info(f"STEP 2.7: Violence Detection (Level {violence_level})")
-            logger.info("=" * 50)
-            
-            # Reuse frames from nudity detection or extract new ones
-            if not frames:
-                frames_dir = temp_dir / "frames"
-                frames = extract_frames(
-                    input_path,
-                    interval=config.nudity.frame_interval,
-                    output_dir=frames_dir
+            # Run local analysis if no cloud result
+            if not used_cloud_cache:
+                analysis_results = analyze_content(
+                    input_path, video_info, config, temp_dir, 
+                    filter_settings, show_progress,
+                    subtitles_path=subtitles_path
                 )
+                profanity_intervals = analysis_results['profanity']
+                nudity_intervals = analysis_results['nudity']
+                sexual_content_intervals = analysis_results['sexual_content']
+                violence_intervals = analysis_results['violence']
+        
+        # Export intervals if requested
+        if export_intervals_path:
+            import json
+            from dataclasses import asdict
             
-            # Convert frames to (timestamp, path) format for violence detector
-            frame_paths = [(frame['timestamp'], Path(frame['path'])) for frame in frames]
+            def _interval_to_dict(i):
+                d = asdict(i)
+                # Serialize enums
+                d['action'] = i.action.value
+                d['source'] = i.source.value
+                return d
+                
+            data = {
+                'profanity': [_interval_to_dict(i) for i in profanity_intervals],
+                'nudity': [_interval_to_dict(i) for i in nudity_intervals],
+                'sexual_content': [_interval_to_dict(i) for i in sexual_content_intervals],
+                'violence': [_interval_to_dict(i) for i in violence_intervals]
+            }
             
-            # Detect violence
-            violence_intervals = detect_violence(
-                frame_paths,
-                level=violence_level,
-                threshold=0.3,
-                min_segment_duration=0.5,
-                buffer_before=0.25,
-                buffer_after=0.25,
-                merge_gap=1.0,
-                show_progress=show_progress
-            )
+            with open(export_intervals_path, 'w') as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"Intervals exported to {export_intervals_path}")
             
-            logger.info(f"Found {len(violence_intervals)} violence intervals to cut")
-        else:
-            logger.info("Skipping violence detection (level 0 - keep all)")
+        # If analyze only, exit
+        if analyze_only:
+            logger.info("Analysis complete. Skipping render (--analyze-only).")
+            return None
+
+        # ... (Proceed to Planning & Rendering) ...
         
         # Step 3: Plan edits
         logger.info("=" * 50)
@@ -713,16 +894,33 @@ def main() -> int:
     
     try:
         # Process video
-        summary, edit_plan = process_video(
+        # Connect CLI args to filter settings
+        filter_settings = ContentFilterSettings(
+            filter_language=not args.no_profanity,
+            filter_nudity=not args.no_nudity
+        )
+
+        # Process video
+        result = process_video(
             input_path=args.input,
             output_path=args.output,
             config=config,
             video_info=video_info,
-            skip_profanity=args.no_profanity,
-            skip_nudity=args.no_nudity,
+            filter_settings=filter_settings,
             show_progress=not args.quiet,
-            temp_dir_root=args.temp_dir
+            temp_dir_root=args.temp_dir,
+            analyze_only=args.analyze_only,
+            export_intervals_path=args.export_intervals,
+            import_intervals_path=args.import_intervals,
+            subtitles_path=args.subtitles
         )
+        
+        # Handle analyze-only return (None)
+        if args.analyze_only:
+             print(f"✓ Analysis complete. Intervals saved to {args.export_intervals}")
+             return 0
+             
+        summary, edit_plan = result
         
         # Save JSON summary if requested
         if args.save_summary:
