@@ -5,19 +5,25 @@ Wraps QMediaPlayer and QVideoWidget with custom controls.
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QSlider, QLabel, 
-    QStyle, QFrame
+    QStyle, QFrame, QComboBox
 )
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtCore import Qt, Signal, QUrl, QTime
+from PySide6.QtGui import QKeyEvent
 
 class VideoPlayerWidget(QWidget):
     """
     A custom video player widget with playback controls.
+    Supports frame stepping, speed control, and keyboard shortcuts.
     """
     
     position_changed = Signal(int)  # Emitted when playback position changes (ms)
     duration_changed = Signal(int)  # Emitted when media duration changes (ms)
+    
+    # Keyboard shortcuts
+    FRAME_STEP_MS = 42  # ~1 frame at 24fps
+    SHUTTLE_STEP_MS = 5000  # 5 seconds for J/L keys
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -30,6 +36,9 @@ class VideoPlayerWidget(QWidget):
         self.media_player.setAudioOutput(self.audio_output)
         self.media_player.setVideoOutput(self.video_widget)
         
+        # Playback speed
+        self.current_speed = 1.0
+        
         # Connect signals
         self.media_player.positionChanged.connect(self._on_position_changed)
         self.media_player.durationChanged.connect(self._on_duration_changed)
@@ -37,6 +46,9 @@ class VideoPlayerWidget(QWidget):
         self.media_player.errorOccurred.connect(self._handle_error)
         
         self._create_ui()
+        
+        # Enable keyboard focus
+        self.setFocusPolicy(Qt.StrongFocus)
         
     def _create_ui(self):
         layout = QVBoxLayout(self)
@@ -54,16 +66,34 @@ class VideoPlayerWidget(QWidget):
         
         # Controls Area
         controls = QFrame()
-        controls.setStyleSheet("background: #181820; padding: 4px;")
+        controls.setStyleSheet("background: #181820; padding: 4px; border-radius: 0 0 6px 6px;")
         controls_layout = QHBoxLayout(controls)
+        controls_layout.setSpacing(8)
+        
+        # Frame Step Back Button
+        self.step_back_btn = QPushButton("⏮")
+        self.step_back_btn.setFixedSize(28, 28)
+        self.step_back_btn.setToolTip("Step back 1 frame (←)")
+        self.step_back_btn.clicked.connect(self.step_backward)
+        self.step_back_btn.setStyleSheet("border: none; border-radius: 4px; background: #2a2a35; font-size: 12px;")
+        controls_layout.addWidget(self.step_back_btn)
         
         # Play/Pause Button
         self.play_btn = QPushButton()
         self.play_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-        self.play_btn.setFixedSize(32, 32)
+        self.play_btn.setFixedSize(36, 36)
+        self.play_btn.setToolTip("Play/Pause (Space)")
         self.play_btn.clicked.connect(self.toggle_playback)
-        self.play_btn.setStyleSheet("border: none; border-radius: 4px; background: #2a2a35;")
+        self.play_btn.setStyleSheet("border: none; border-radius: 4px; background: #3b82f6;")
         controls_layout.addWidget(self.play_btn)
+        
+        # Frame Step Forward Button
+        self.step_fwd_btn = QPushButton("⏭")
+        self.step_fwd_btn.setFixedSize(28, 28)
+        self.step_fwd_btn.setToolTip("Step forward 1 frame (→)")
+        self.step_fwd_btn.clicked.connect(self.step_forward)
+        self.step_fwd_btn.setStyleSheet("border: none; border-radius: 4px; background: #2a2a35; font-size: 12px;")
+        controls_layout.addWidget(self.step_fwd_btn)
         
         # Time Label (Current)
         self.time_label = QLabel("00:00")
@@ -83,6 +113,26 @@ class VideoPlayerWidget(QWidget):
         self.duration_label.setStyleSheet("color: #71717a; font-family: monospace; font-size: 11px;")
         controls_layout.addWidget(self.duration_label)
         
+        # Speed Control
+        self.speed_combo = QComboBox()
+        self.speed_combo.addItems(["0.25x", "0.5x", "1x", "1.5x", "2x"])
+        self.speed_combo.setCurrentText("1x")
+        self.speed_combo.setFixedWidth(60)
+        self.speed_combo.currentTextChanged.connect(self._on_speed_changed)
+        self.speed_combo.setStyleSheet("""
+            QComboBox {
+                background: #2a2a35;
+                color: #a1a1aa;
+                border: none;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+            QComboBox::drop-down { border: none; width: 16px; }
+            QComboBox::down-arrow { image: none; }
+        """)
+        controls_layout.addWidget(self.speed_combo)
+        
         # Volume
         vol_btn = QPushButton("🔊")
         vol_btn.setFixedSize(24, 24)
@@ -98,6 +148,44 @@ class VideoPlayerWidget(QWidget):
         
         layout.addWidget(controls)
         
+    def keyPressEvent(self, event: QKeyEvent):
+        """Handle keyboard shortcuts."""
+        key = event.key()
+        
+        if key == Qt.Key_Space:
+            self.toggle_playback()
+        elif key == Qt.Key_Left:
+            self.step_backward()
+        elif key == Qt.Key_Right:
+            self.step_forward()
+        elif key == Qt.Key_J:
+            # Shuttle backward 5 seconds
+            new_pos = max(0, self.media_player.position() - self.SHUTTLE_STEP_MS)
+            self.set_position(new_pos)
+        elif key == Qt.Key_K:
+            # Pause
+            self.media_player.pause()
+        elif key == Qt.Key_L:
+            # Shuttle forward 5 seconds
+            new_pos = min(self.media_player.duration(), self.media_player.position() + self.SHUTTLE_STEP_MS)
+            self.set_position(new_pos)
+        elif key == Qt.Key_Home:
+            self.set_position(0)
+        elif key == Qt.Key_End:
+            self.set_position(self.media_player.duration() - 100)
+        elif key == Qt.Key_BracketLeft:
+            # Decrease speed
+            idx = self.speed_combo.currentIndex()
+            if idx > 0:
+                self.speed_combo.setCurrentIndex(idx - 1)
+        elif key == Qt.Key_BracketRight:
+            # Increase speed
+            idx = self.speed_combo.currentIndex()
+            if idx < self.speed_combo.count() - 1:
+                self.speed_combo.setCurrentIndex(idx + 1)
+        else:
+            super().keyPressEvent(event)
+    
     def load_video(self, path: str):
         """Load a video file."""
         self.media_player.setSource(QUrl.fromLocalFile(path))
@@ -114,10 +202,28 @@ class VideoPlayerWidget(QWidget):
         
     def pause(self):
         self.media_player.pause()
+    
+    def step_forward(self):
+        """Step forward by one frame (~42ms at 24fps)."""
+        self.media_player.pause()
+        new_pos = min(self.media_player.duration(), self.media_player.position() + self.FRAME_STEP_MS)
+        self.media_player.setPosition(new_pos)
+    
+    def step_backward(self):
+        """Step backward by one frame (~42ms at 24fps)."""
+        self.media_player.pause()
+        new_pos = max(0, self.media_player.position() - self.FRAME_STEP_MS)
+        self.media_player.setPosition(new_pos)
         
     def set_position(self, position: int):
         """Seek to position in ms."""
         self.media_player.setPosition(position)
+    
+    def _on_speed_changed(self, speed_text: str):
+        """Handle playback speed change."""
+        speed = float(speed_text.replace("x", ""))
+        self.current_speed = speed
+        self.media_player.setPlaybackRate(speed)
         
     def _on_position_changed(self, position: int):
         self.slider.setValue(position)

@@ -1,20 +1,85 @@
 """
 Interactive Timeline Widget for Video Censor.
 Visualizes detected content segments and allows user interaction.
+Enhanced with playhead, time ruler, and segment editing controls.
 """
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QScrollArea, 
-    QToolTip, QSizePolicy
+    QToolTip, QSizePolicy, QPushButton
 )
 from PySide6.QtCore import Qt, Signal, QRectF, QPoint, QSize
-from PySide6.QtCore import Qt, Signal, QRectF, QPoint, QSize
-from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QMouseEvent
+from PySide6.QtGui import QPainter, QColor, QBrush, QPen, QMouseEvent, QLinearGradient
+
+
+class TimeRuler(QWidget):
+    """Time ruler showing tick marks and time labels."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.duration = 0
+        self.setFixedHeight(24)
+        
+    def set_duration(self, duration: float):
+        self.duration = duration
+        self.update()
+        
+    def paintEvent(self, event):
+        if self.duration <= 0:
+            return
+            
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        width = self.width()
+        height = self.height()
+        
+        # Background
+        painter.fillRect(self.rect(), QColor("#15151d"))
+        
+        # Calculate tick intervals based on duration
+        if self.duration < 60:  # < 1 min: every 5 sec
+            interval = 5
+        elif self.duration < 600:  # < 10 min: every 30 sec
+            interval = 30
+        elif self.duration < 3600:  # < 1 hr: every minute
+            interval = 60
+        else:  # > 1 hr: every 5 min
+            interval = 300
+            
+        # Draw ticks and labels
+        painter.setPen(QPen(QColor("#4a4a5a"), 1))
+        font = painter.font()
+        font.setPixelSize(9)
+        painter.setFont(font)
+        
+        t = 0
+        while t <= self.duration:
+            x = (t / self.duration) * width
+            
+            # Major tick
+            painter.drawLine(int(x), height - 8, int(x), height)
+            
+            # Time label
+            m, s = divmod(int(t), 60)
+            h, m = divmod(m, 60)
+            if h > 0:
+                label = f"{h}:{m:02d}:{s:02d}"
+            else:
+                label = f"{m}:{s:02d}"
+            
+            painter.setPen(QColor("#71717a"))
+            painter.drawText(int(x) + 3, height - 10, label)
+            painter.setPen(QPen(QColor("#4a4a5a"), 1))
+            
+            t += interval
+
 
 class TimelineTrack(QWidget):
     """A single track in the timeline (e.g., Nudity, Profanity)."""
     
     segment_clicked = Signal(object)  # Emits segment data
+    segment_deleted = Signal(object)  # Emits segment to delete
     
     def __init__(self, title: str, color: QColor, duration: float, segments: list, parent=None):
         super().__init__(parent)
@@ -22,40 +87,82 @@ class TimelineTrack(QWidget):
         self.base_color = color
         self.duration = max(0.1, duration)
         self.segments = segments
-        self.setFixedHeight(30)
+        self.hovered_segment = None
+        self.playhead_pos = 0  # Playhead position in seconds
+        self.setFixedHeight(36)
         self.setMouseTracking(True)
+        
+    def set_playhead(self, position_sec: float):
+        """Update playhead position."""
+        self.playhead_pos = position_sec
+        self.update()
         
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        # Background
-        painter.fillRect(self.rect(), QColor("#1f1f2a"))
-        
-        # Draw segments
         width = self.width()
         height = self.height()
         
+        # Background with subtle gradient
+        gradient = QLinearGradient(0, 0, 0, height)
+        gradient.setColorAt(0, QColor("#1f1f2a"))
+        gradient.setColorAt(1, QColor("#18181f"))
+        painter.fillRect(self.rect(), gradient)
+        
+        # Draw segments
         for seg in self.segments:
             start = seg.get('start', 0)
             end = seg.get('end', 0)
             
             x1 = (start / self.duration) * width
             x2 = (end / self.duration) * width
-            w = max(2, x2 - x1)
+            w = max(4, x2 - x1)
             
             # Check if ignored/overridden
             is_ignored = seg.get('ignored', False)
+            is_hovered = seg == self.hovered_segment
+            
             color = QColor(self.base_color)
             if is_ignored:
-                color.setAlpha(50) # Dimmed
+                color.setAlpha(40)
+            elif is_hovered:
+                color.setAlpha(255)
             else:
-                color.setAlpha(200)
-                
-            rect = QRectF(x1, 2, w, height - 4)
-            painter.fillRect(rect, color)
+                color.setAlpha(180)
             
-            # Border if hovered (not implemented per segment yet, simple hover handled globally)
+            # Rounded rectangle for segment
+            rect = QRectF(x1, 4, w, height - 8)
+            painter.setBrush(color)
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(rect, 4, 4)
+            
+            # Border for hovered segment
+            if is_hovered:
+                painter.setPen(QPen(QColor("#ffffff"), 2))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRoundedRect(rect, 4, 4)
+                
+            # Strikethrough for ignored segments
+            if is_ignored:
+                painter.setPen(QPen(QColor("#ef4444"), 2, Qt.DashLine))
+                painter.drawLine(int(x1), int(height/2), int(x1 + w), int(height/2))
+        
+        # Draw playhead line
+        if self.playhead_pos > 0:
+            playhead_x = (self.playhead_pos / self.duration) * width
+            painter.setPen(QPen(QColor("#3b82f6"), 2))
+            painter.drawLine(int(playhead_x), 0, int(playhead_x), height)
+            
+            # Playhead triangle
+            painter.setBrush(QColor("#3b82f6"))
+            painter.setPen(Qt.NoPen)
+            triangle = [
+                QPoint(int(playhead_x) - 5, 0),
+                QPoint(int(playhead_x) + 5, 0),
+                QPoint(int(playhead_x), 6)
+            ]
+            painter.drawPolygon(triangle)
     
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
@@ -67,7 +174,17 @@ class TimelineTrack(QWidget):
             for seg in self.segments:
                 if seg.get('start', 0) <= time <= seg.get('end', 0):
                     self.segment_clicked.emit(seg)
-                    self.update() # Repaint
+                    self.update()
+                    return
+        elif event.button() == Qt.RightButton:
+            # Right-click to delete segment
+            x = event.position().x()
+            width = self.width()
+            time = (x / width) * self.duration
+            
+            for seg in self.segments:
+                if seg.get('start', 0) <= time <= seg.get('end', 0):
+                    self.segment_deleted.emit(seg)
                     return
                     
     def mouseMoveEvent(self, event: QMouseEvent):
@@ -75,19 +192,33 @@ class TimelineTrack(QWidget):
         width = self.width()
         time = (x / width) * self.duration
         
-        # Tooltip
-        found = False
+        # Find hovered segment
+        old_hovered = self.hovered_segment
+        self.hovered_segment = None
+        
         for seg in self.segments:
             if seg.get('start', 0) <= time <= seg.get('end', 0):
-                label = seg.get('label', self.track_title)
+                self.hovered_segment = seg
+                label = seg.get('label', seg.get('reason', self.track_title))
                 start = self._format_time(seg['start'])
                 end = self._format_time(seg['end'])
-                QToolTip.showText(event.globalPosition().toPoint(), f"{label}\n{start} - {end}", self)
-                found = True
+                status = " (kept)" if seg.get('ignored') else " (censored)"
+                QToolTip.showText(
+                    event.globalPosition().toPoint(), 
+                    f"{label}{status}\n{start} → {end}\n\nClick to toggle • Right-click to delete",
+                    self
+                )
                 break
         
-        if not found:
+        if self.hovered_segment is None:
             QToolTip.hideText()
+            
+        if old_hovered != self.hovered_segment:
+            self.update()
+            
+    def leaveEvent(self, event):
+        self.hovered_segment = None
+        self.update()
             
     def _format_time(self, seconds: float) -> str:
         m, s = divmod(int(seconds), 60)
@@ -98,63 +229,71 @@ class TimelineTrack(QWidget):
 
 
 class TimelineWidget(QWidget):
-    """Main timeline widget containing multiple tracks."""
+    """Main timeline widget containing multiple tracks with playhead."""
     
     seek_requested = Signal(int)  # Emitted when user clicks to seek (ms)
+    data_changed = Signal()  # Emitted when segment data is modified
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.layout = QVBoxLayout(self)
-        self.layout.setSpacing(10)
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Header / Ruler
-        self.header_layout = QHBoxLayout()
-        self.time_label = QLabel("00:00")
-        self.time_label.setStyleSheet("color: #71717a; font-family: monospace;")
-        self.header_layout.addWidget(self.time_label)
-        self.header_layout.addStretch()
-        self.layout.addLayout(self.header_layout)
+        # Header with current time
+        header = QHBoxLayout()
+        self.time_label = QLabel("00:00.000")
+        self.time_label.setStyleSheet("color: #3b82f6; font-family: monospace; font-size: 14px; font-weight: bold;")
+        header.addWidget(self.time_label)
+        
+        self.duration_label = QLabel("/ 00:00")
+        self.duration_label.setStyleSheet("color: #71717a; font-family: monospace; font-size: 12px;")
+        header.addWidget(self.duration_label)
+        
+        header.addStretch()
+        
+        # Keyboard hints
+        hints = QLabel("Space: Play • ←→: Frame • J/K/L: Shuttle • Click: Toggle")
+        hints.setStyleSheet("color: #52525b; font-size: 10px;")
+        header.addWidget(hints)
+        
+        main_layout.addLayout(header)
+        
+        # Time ruler
+        self.ruler = TimeRuler()
+        main_layout.addWidget(self.ruler)
         
         # Tracks container
         self.tracks_container = QWidget()
         self.tracks_layout = QVBoxLayout(self.tracks_container)
-        self.tracks_layout.setSpacing(4)
-        self.tracks_layout.setContentsMargins(0,0,0,0)
-        self.layout.addWidget(self.tracks_container)
+        self.tracks_layout.setSpacing(2)
+        self.tracks_layout.setContentsMargins(0, 4, 0, 4)
+        main_layout.addWidget(self.tracks_container)
         
         self.duration = 0
-        self.current_position = 0 # in ms
+        self.current_position = 0  # in ms
         self.tracks = {}
 
     def set_position(self, position_ms: int):
         """Update current playback position."""
         self.current_position = position_ms
-        self.time_label.setText(self._format_time(position_ms / 1000))
-        self.update() # Trigger repaint for playhead
-
-    def paintEvent(self, event):
-        """Draw the playhead overlay."""
-        super().paintEvent(event)
+        position_sec = position_ms / 1000
         
-        if self.duration <= 0:
-            return
-            
-        # Draw tracks first (handled by children widgets)
-        # We need to draw the playhead ON TOP of everything
-        # Since child widgets paint over this widget, we can't easily draw on top efficiently without an overlay.
-        # Alternative: Ask tracks to draw the line? No.
-        # Better: Use a transparent overlay widget OR simply handle mouse clicks here and let the container manage the line.
-        # Actually, simpler approach for now:
-        # Just update the time label.
-        # Drawing a line across multiple child widgets is tricky in Qt without an overlay.
-        # Let's add a "PlayheadOverlay" class if needed, or just draw it on the tracks themselves?
+        # Update time label with milliseconds
+        m, s = divmod(position_sec, 60)
+        h, m = divmod(int(m), 60)
+        ms_part = int((position_sec % 1) * 1000)
+        if h > 0:
+            self.time_label.setText(f"{int(h)}:{int(m):02d}:{int(s):02d}.{ms_part:03d}")
+        else:
+            self.time_label.setText(f"{int(m):02d}:{int(s):02d}.{ms_part:03d}")
         
-        # New approach: Pass current position to tracks and let them draw it?
-        pass
+        # Update playhead on all tracks
+        for track in self.tracks.values():
+            track.set_playhead(position_sec)
 
     def mousePressEvent(self, event: QMouseEvent):
-        """Handle clicking on the background/header to seek."""
+        """Handle clicking on the timeline to seek."""
         if self.duration > 0 and event.button() == Qt.LeftButton:
             x = event.position().x()
             width = self.width()
@@ -162,43 +301,51 @@ class TimelineWidget(QWidget):
             self.seek_requested.emit(seek_time_ms)
 
     def set_data(self, duration: float, data: dict):
-        """
-        Load detection data.
-        data = {
-            'nudity': [...],
-            'profanity': [...],
-            ...
-        }
-        """
+        """Load detection data."""
         self.duration = duration
         self._clear_tracks()
         
-        # Nudity
-        if data.get('nudity'):
-            self._add_track("Nudity", "#f43f5e", data['nudity'])
-            
-        # Profanity
-        if data.get('profanity'):
-            self._add_track("Profanity", "#fbbf24", data['profanity'])
-            
-        # Sexual Content
-        if data.get('sexual_content'):
-            self._add_track("Sexual Content", "#d946ef", data['sexual_content'])
-            
-        # Violence
-        if data.get('violence'):
-            self._add_track("Violence", "#ef4444", data['violence'])
+        # Update labels
+        self.ruler.set_duration(duration)
+        m, s = divmod(int(duration), 60)
+        h, m = divmod(m, 60)
+        if h > 0:
+            self.duration_label.setText(f"/ {h}:{m:02d}:{s:02d}")
+        else:
+            self.duration_label.setText(f"/ {m}:{s:02d}")
+        
+        # Add tracks for each content type
+        track_config = [
+            ("Nudity", "#f43f5e", "nudity"),
+            ("Profanity", "#fbbf24", "profanity"),
+            ("Sexual Content", "#d946ef", "sexual_content"),
+            ("Violence", "#ef4444", "violence"),
+        ]
+        
+        for title, color, key in track_config:
+            if data.get(key):
+                self._add_track(title, color, data[key])
             
     def _add_track(self, title: str, color_hex: str, segments: list):
-        # Label
+        # Container for label + track
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        
+        # Label (fixed width)
         lbl = QLabel(title)
+        lbl.setFixedWidth(100)
         lbl.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: bold;")
-        self.tracks_layout.addWidget(lbl)
+        row_layout.addWidget(lbl)
         
         # Track
         track = TimelineTrack(title, QColor(color_hex), self.duration, segments)
         track.segment_clicked.connect(self._on_segment_clicked)
-        self.tracks_layout.addWidget(track)
+        track.segment_deleted.connect(self._on_segment_deleted)
+        row_layout.addWidget(track, 1)
+        
+        self.tracks_layout.addWidget(row)
         self.tracks[title] = track
         
     def _clear_tracks(self):
@@ -209,11 +356,18 @@ class TimelineWidget(QWidget):
         self.tracks = {}
         
     def _on_segment_clicked(self, segment):
-        # Toggle 'ignored' state
+        """Toggle 'ignored' state on click."""
         segment['ignored'] = not segment.get('ignored', False)
-        # In a real app, we'd emit a signal that something changed
-        # For not, just repaint
         self.sender().update()
+        self.data_changed.emit()
+        
+    def _on_segment_deleted(self, segment):
+        """Remove segment from track."""
+        track = self.sender()
+        if segment in track.segments:
+            track.segments.remove(segment)
+            track.update()
+            self.data_changed.emit()
 
     def _format_time(self, seconds: float) -> str:
         m, s = divmod(int(seconds), 60)
