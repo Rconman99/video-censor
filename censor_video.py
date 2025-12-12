@@ -558,6 +558,7 @@ def process_video(
     violence_intervals = []
     
     used_cloud_cache = False
+    use_cloud_cache = True  # Enable cloud cache lookup by default
     cloud_fingerprint = None
     
     try:
