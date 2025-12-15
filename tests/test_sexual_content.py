@@ -208,7 +208,8 @@ class TestEdgeCases:
         words = [
             WordTimestamp("PORN", 0.0, 0.5),
         ]
-        detector = SexualContentDetector(threshold=0.5)
+        # Disable regex patterns to test pure lexicon matching
+        detector = SexualContentDetector(threshold=0.5, use_regex_patterns=False)
         segment = detector.analyze_segment(words, 0, 1)
         assert len(segment.matches) == 1
     
@@ -216,7 +217,8 @@ class TestEdgeCases:
         words = [
             WordTimestamp("porn,", 0.0, 0.5),
         ]
-        detector = SexualContentDetector(threshold=0.5)
+        # Disable regex patterns to test pure lexicon matching
+        detector = SexualContentDetector(threshold=0.5, use_regex_patterns=False)
         segment = detector.analyze_segment(words, 0, 1)
         assert len(segment.matches) == 1
     
@@ -230,5 +232,151 @@ class TestEdgeCases:
         assert len(segment.matches) >= 1
 
 
+class TestContextModifiers:
+    """Test context-aware suppression and amplification."""
+    
+    def test_suck_suppressed_in_innocent_context(self):
+        """'suck' should be suppressed when used in 'this sucks' context."""
+        words = [
+            WordTimestamp("this", 0.0, 0.3),
+            WordTimestamp("movie", 0.3, 0.6),
+            WordTimestamp("sucks", 0.6, 1.0),
+        ]
+        detector = SexualContentDetector(threshold=0.5, use_context_modifiers=True)
+        segment = detector.analyze_segment(words, 0, 3)
+        
+        # Should have a match but it should be suppressed
+        suck_matches = [m for m in segment.matches if "suck" in m.text.lower()]
+        assert all(m.suppressed for m in suck_matches)
+        assert segment.active_match_count == 0
+    
+    def test_escort_suppressed_in_police_context(self):
+        """'escort' should be suppressed when used with 'police'."""
+        words = [
+            WordTimestamp("police", 0.0, 0.4),
+            WordTimestamp("escort", 0.4, 0.8),
+            WordTimestamp("arrived", 0.8, 1.2),
+        ]
+        detector = SexualContentDetector(threshold=0.5, use_context_modifiers=True)
+        segment = detector.analyze_segment(words, 0, 3)
+        
+        escort_matches = [m for m in segment.matches if "escort" in m.text.lower()]
+        assert all(m.suppressed for m in escort_matches)
+    
+    def test_suck_amplified_in_explicit_context(self):
+        """'suck' should be amplified when used with explicit terms."""
+        words = [
+            WordTimestamp("suck", 0.0, 0.3),
+            WordTimestamp("my", 0.3, 0.5),
+            WordTimestamp("dick", 0.5, 0.9),
+        ]
+        detector = SexualContentDetector(threshold=0.5, use_context_modifiers=True)
+        segment = detector.analyze_segment(words, 0, 3)
+        
+        suck_matches = [m for m in segment.matches if m.text.lower() == "suck"]
+        assert len(suck_matches) >= 1
+        assert suck_matches[0].context_modifier == 1.5  # Amplified
+        assert not suck_matches[0].suppressed
+
+
+class TestSafeContextPatterns:
+    """Test safe context detection for medical/educational/news content."""
+    
+    def test_medical_context_reduces_score(self):
+        """Medical context words should reduce the score."""
+        words = [
+            WordTimestamp("doctor", 0.0, 0.3),
+            WordTimestamp("examined", 0.3, 0.6),
+            WordTimestamp("breasts", 0.6, 1.0),
+            WordTimestamp("patient", 1.0, 1.3),
+        ]
+        detector = SexualContentDetector(threshold=0.5, use_safe_context=True)
+        segment = detector.analyze_segment(words, 0, 4)
+        
+        # Safe context should reduce the modifier
+        assert segment.safe_context_modifier < 1.0
+        # Total score should be reduced
+        assert segment.total_score < segment.raw_score
+    
+    def test_news_context_reduces_score(self):
+        """News/reporting context should reduce the score."""
+        words = [
+            WordTimestamp("police", 0.0, 0.3),
+            WordTimestamp("arrested", 0.3, 0.6),
+            WordTimestamp("sex", 0.6, 0.9),
+            WordTimestamp("offender", 0.9, 1.2),
+        ]
+        detector = SexualContentDetector(threshold=0.5, use_safe_context=True)
+        segment = detector.analyze_segment(words, 0, 4)
+        
+        # Safe context should reduce the modifier
+        assert segment.safe_context_modifier < 1.0
+
+
+class TestRegexPatterns:
+    """Test regex pattern matching for evasion detection."""
+    
+    def test_leetspeak_porn_detected(self):
+        """Leetspeak 'p0rn' should be detected."""
+        words = [
+            WordTimestamp("watching", 0.0, 0.5),
+            WordTimestamp("p0rn", 0.5, 1.0),
+        ]
+        detector = SexualContentDetector(threshold=0.5, use_regex_patterns=True)
+        segment = detector.analyze_segment(words, 0, 2)
+        
+        # Should have regex matches
+        regex_matches = [m for m in segment.matches if m.match_type == "regex"]
+        assert len(regex_matches) >= 1
+    
+    def test_spaced_out_evasion_detected(self):
+        """Spaced out 's e x' should be detected."""
+        words = [
+            WordTimestamp("having", 0.0, 0.4),
+            WordTimestamp("s", 0.4, 0.5),
+            WordTimestamp("e", 0.5, 0.6),  
+            WordTimestamp("x", 0.6, 0.7),
+        ]
+        detector = SexualContentDetector(threshold=0.5, use_regex_patterns=True)
+        segment = detector.analyze_segment(words, 0, 4)
+        
+        # The segment text is "having s e x" which should match spaced pattern
+        regex_matches = [m for m in segment.matches if m.match_type == "regex"]
+        assert len(regex_matches) >= 1
+
+
+class TestConfidenceScoring:
+    """Test confidence score calculation."""
+    
+    def test_confidence_high_for_multiple_matches(self):
+        """Multiple matches should result in high confidence."""
+        words = [
+            WordTimestamp("porn", 0.0, 0.4),
+            WordTimestamp("and", 0.4, 0.6),
+            WordTimestamp("sex", 0.6, 1.0),
+        ]
+        detector = SexualContentDetector(threshold=0.5, use_regex_patterns=False)
+        segment = detector.analyze_segment(words, 0, 3)
+        
+        # Multiple matches = higher confidence
+        assert segment.confidence > 0.5
+        assert segment.confidence_level in ("medium", "high")
+    
+    def test_confidence_zero_when_suppressed(self):
+        """Suppressed matches should result in zero confidence."""
+        words = [
+            WordTimestamp("this", 0.0, 0.3),
+            WordTimestamp("game", 0.3, 0.6),
+            WordTimestamp("sucks", 0.6, 1.0),
+        ]
+        detector = SexualContentDetector(threshold=0.5, use_context_modifiers=True)
+        segment = detector.analyze_segment(words, 0, 3)
+        
+        # "sucks" suppressed in innocent context
+        assert segment.confidence == 0.0
+        assert segment.confidence_level == "low"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+

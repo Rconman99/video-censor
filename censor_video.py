@@ -35,7 +35,16 @@ from video_censor.profanity import (
     detect_profanity_phrases, analyze_subtitles_for_profanity
 )
 from video_censor.nudity import extract_frames, detect_nudity
-from video_censor.sexual_content import detect_sexual_content, load_sexual_terms, load_sexual_phrases
+from video_censor.sexual_content import (
+    detect_sexual_content, 
+    load_sexual_terms, 
+    load_sexual_phrases,
+    # Phase 2: Hybrid detection
+    detect_sexual_content_hybrid,
+    is_semantic_detection_available,
+    # Phase 2: Multimodal fusion
+    fuse_multimodal_detections,
+)
 from video_censor.violence import detect_violence
 from video_censor.editing import merge_intervals, plan_edits, render_censored_video
 from video_censor.reporting import generate_summary, print_summary, save_edit_timeline
@@ -449,23 +458,69 @@ def analyze_content(
         except Exception as e:
             logger.error(f"Subtitle analysis failed: {e}")
 
-    # Step 2.5: Sexual Content
+    # Step 2.5: Sexual Content Detection (Enhanced with Phase 1+2)
     if not skip_sexual_content and config.sexual_content.enabled and words:
         logger.info("STEP 2.5: Sexual Content Detection")
-        sexual_terms = load_sexual_terms(config.sexual_content.custom_terms_path)
-        sexual_phrases = load_sexual_phrases(config.sexual_content.custom_phrases_path)
         
-        sexual_content_intervals = detect_sexual_content(
-            words,
-            terms=sexual_terms,
-            phrases=sexual_phrases,
-            threshold=config.sexual_content.threshold,
-            unsafe_threshold=config.sexual_content.unsafe_threshold,
-            merge_gap=config.sexual_content.merge_gap,
-            buffer_before=config.sexual_content.buffer_before,
-            buffer_after=config.sexual_content.buffer_after,
-            debug=config.sexual_content.debug
-        )
+        sc_config = config.sexual_content
+        sexual_terms = load_sexual_terms(sc_config.custom_terms_path)
+        sexual_phrases = load_sexual_phrases(sc_config.custom_phrases_path)
+        
+        # Determine detection method based on config
+        use_hybrid = sc_config.use_hybrid_detection and is_semantic_detection_available()
+        
+        if use_hybrid:
+            # Phase 2: Hybrid detection (lexicon + semantic ML verification)
+            logger.info("  Using HYBRID detection (lexicon + ML semantic)")
+            sexual_content_intervals = detect_sexual_content_hybrid(
+                words,
+                threshold=sc_config.threshold,
+                use_semantic=sc_config.use_semantic_verification,
+                merge_gap=sc_config.merge_gap,
+                buffer_before=sc_config.buffer_before,
+                buffer_after=sc_config.buffer_after,
+            )
+        else:
+            # Phase 1: Enhanced lexicon detection with context awareness
+            from video_censor.sexual_content import SexualContentDetector
+            from video_censor.editing.intervals import merge_intervals as merge_ti
+            
+            detector = SexualContentDetector(
+                terms=sexual_terms,
+                phrases=sexual_phrases,
+                threshold=sc_config.threshold,
+                unsafe_threshold=sc_config.unsafe_threshold,
+                # Phase 1 enhancements
+                use_context_modifiers=sc_config.use_context_modifiers,
+                use_safe_context=sc_config.use_safe_context,
+                use_regex_patterns=sc_config.use_regex_patterns,
+                debug=sc_config.debug
+            )
+            
+            raw_intervals = detector.detect(words)
+            
+            # Add buffers
+            from video_censor.editing.intervals import TimeInterval
+            buffered = []
+            for interval in raw_intervals:
+                buffered.append(TimeInterval(
+                    start=max(0, interval.start - sc_config.buffer_before),
+                    end=interval.end + sc_config.buffer_after,
+                    reason=interval.reason,
+                    metadata=interval.metadata
+                ))
+            
+            # Merge nearby intervals
+            sexual_content_intervals = merge_ti(buffered, sc_config.merge_gap)
+        
+        # Log Phase 1 feature status
+        if sc_config.use_context_modifiers:
+            logger.info("  ✓ Context modifiers enabled (suppress/amplify)")
+        if sc_config.use_safe_context:
+            logger.info("  ✓ Safe context patterns enabled (medical/news reduction)")
+        if sc_config.use_regex_patterns:
+            logger.info("  ✓ Regex patterns enabled (leetspeak detection)")
+        
         logger.info(f"Found {len(sexual_content_intervals)} sexual content intervals")
         
     # Step 2.7: Violence Detection
@@ -492,6 +547,37 @@ def analyze_content(
             show_progress=show_progress
         )
         logger.info(f"Found {len(violence_intervals)} violence intervals")
+
+    # Step 2.8: Multimodal Fusion (Optional)
+    # Combines audio (transcript) and visual (nudity) detections for higher accuracy
+    if config.sexual_content.use_multimodal_fusion and sexual_content_intervals and nudity_intervals:
+        logger.info("STEP 2.8: Multimodal Fusion (Audio + Visual)")
+        
+        # Fuse sexual content (from transcript) with nudity (from visual)
+        fused_intervals = fuse_multimodal_detections(
+            audio_intervals=sexual_content_intervals,
+            visual_intervals=nudity_intervals,
+            audio_weight=config.sexual_content.audio_weight,
+            visual_weight=config.sexual_content.visual_weight,
+            agreement_boost=config.sexual_content.agreement_boost,
+            min_confidence=0.3,
+            merge_gap=config.sexual_content.merge_gap,
+        )
+        
+        # Count agreement types
+        both_count = sum(1 for i in fused_intervals if i.metadata.get('agreement_level') == 'both')
+        audio_only = sum(1 for i in fused_intervals if i.metadata.get('agreement_level') == 'audio_only')
+        visual_only = sum(1 for i in fused_intervals if i.metadata.get('agreement_level') == 'visual_only')
+        
+        logger.info(f"  Multimodal fusion results:")
+        logger.info(f"    - Both agree (high confidence): {both_count}")
+        logger.info(f"    - Audio only: {audio_only}")
+        logger.info(f"    - Visual only: {visual_only}")
+        logger.info(f"  Total fused intervals: {len(fused_intervals)}")
+        
+        # Replace sexual_content_intervals with fused results
+        # The fused intervals include both audio-based and visual-based with proper attribution
+        sexual_content_intervals = fused_intervals
 
     return {
         'profanity': profanity_intervals,

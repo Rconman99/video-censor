@@ -29,3 +29,8 @@ pytest>=7.0.0
 
 # Cloud database (crowdsourced timestamps)
 supabase>=2.0.0
+
+# Optional: ML-based semantic detection (Phase 2)
+# Adds ~200MB to install size, but enables 88%+ accuracy detection
+# Install with: pip install sentence-transformers
+# sentence-transformers>=2.2.0

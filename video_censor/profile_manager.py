@@ -141,6 +141,10 @@ class ProfileManager:
         """Get all profile names, with Default first."""
         return [p.name for p in self.list_profiles()]
     
+    def list_all(self) -> List[Profile]:
+        """Alias for list_profiles for API compatibility."""
+        return self.list_profiles()
+    
     def add(self, profile: Profile) -> None:
         """Add a new profile. Raises ValueError if name already exists."""
         if profile.name in self._profiles:

@@ -71,6 +71,23 @@ class SexualContentConfig:
     buffer_after: float = 0.25
     merge_gap: float = 0.5
     debug: bool = False  # Enable debug logging
+    
+    # Phase 1: Context-aware detection
+    use_context_modifiers: bool = True  # Suppress/amplify based on surrounding words
+    use_safe_context: bool = True  # Reduce scores for medical/educational/news contexts
+    use_regex_patterns: bool = True  # Detect leetspeak and evasion patterns
+    
+    # Phase 2: ML-enhanced detection
+    use_hybrid_detection: bool = False  # Use hybrid lexicon + semantic detector
+    use_semantic_verification: bool = False  # Verify uncertain detections with ML
+    semantic_threshold: float = 0.5  # Minimum semantic similarity to verify
+    
+    # Phase 2: Multimodal fusion
+    use_multimodal_fusion: bool = False  # Combine audio + visual detections
+    audio_weight: float = 0.4  # Weight for audio/transcript detections
+    visual_weight: float = 0.6  # Weight for visual/nudity detections
+    agreement_boost: float = 0.3  # Confidence boost when both modalities agree
+
 
 
 @dataclass
@@ -129,6 +146,16 @@ class ContentLookupConfig:
 
 
 @dataclass
+class CommunityConfig:
+    """Configuration for community timestamp sharing."""
+    enabled: bool = True
+    auto_lookup: bool = True        # Auto-check cloud on video drop
+    auto_upload: bool = False       # Prompt before uploading (safer default)
+    min_quality_score: float = 0.5  # Only use timestamps above this score
+    device_id: str = ""             # Auto-generated anonymous device ID
+
+
+@dataclass
 class Config:
     """Main configuration container."""
     profanity: ProfanityConfig = field(default_factory=ProfanityConfig)
@@ -139,6 +166,7 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     content_lookup: ContentLookupConfig = field(default_factory=ContentLookupConfig)
+    community: CommunityConfig = field(default_factory=CommunityConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
     
     @classmethod
@@ -208,6 +236,12 @@ class Config:
                 for key, value in data['system'].items():
                     if hasattr(config.system, key):
                         setattr(config.system, key, value)
+            
+            # Update community config
+            if 'community' in data:
+                for key, value in data['community'].items():
+                    if hasattr(config.community, key):
+                        setattr(config.community, key, value)
         
         return config
     

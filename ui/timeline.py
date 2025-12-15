@@ -375,3 +375,37 @@ class TimelineWidget(QWidget):
         if h > 0:
             return f"{h}:{m:02d}:{s:02d}"
         return f"{m}:{s:02d}"
+    
+    def highlight_segment(self, segment: dict):
+        """Highlight a specific segment across all tracks."""
+        # Find which track contains this segment and highlight it
+        for title, track in self.tracks.items():
+            if segment in track.segments:
+                track.hovered_segment = segment
+                track.update()
+                
+                # Seek the playhead to segment start
+                self.set_position(int(segment.get('start', 0) * 1000))
+            else:
+                # Clear highlight from other tracks
+                track.hovered_segment = None
+                track.update()
+                
+    def remove_segment(self, track_key: str, segment: dict):
+        """Remove a segment from a track by key."""
+        # Map track_key to title
+        key_to_title = {
+            'nudity': 'Nudity',
+            'profanity': 'Profanity',
+            'sexual_content': 'Sexual Content',
+            'violence': 'Violence',
+        }
+        
+        title = key_to_title.get(track_key, track_key.title())
+        track = self.tracks.get(title)
+        
+        if track and segment in track.segments:
+            track.segments.remove(segment)
+            track.update()
+            self.data_changed.emit()
+

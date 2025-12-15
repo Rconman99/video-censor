@@ -500,4 +500,96 @@ QLabel[class="status-complete"] {
     font-size: 12px;
     font-weight: 600;
 }
+
+/* ============================================
+   NEW PREFERENCE UI STYLES
+   ============================================ */
+
+/* Filter Card */
+QFrame[class="filter-card"] {
+    background-color: #161620;
+    border: 1px solid #282838;
+    border-radius: 12px;
+    padding: 16px;
+}
+QFrame[class="filter-card"]:hover {
+    border-color: #383850;
+    background-color: #181824;
+}
+
+/* Switch Style Checkbox */
+QCheckBox[class="switch"] {
+    spacing: 8px;
+    color: #f5f5f8;
+    background: transparent;
+}
+QCheckBox[class="switch"]::indicator {
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    background-color: #282838;
+    border: 1px solid #383850;
+    image: none;
+}
+QCheckBox[class="switch"]::indicator:hover {
+    border-color: #4a4a60;
+    background-color: #2d2d3d;
+}
+QCheckBox[class="switch"]::indicator:checked {
+    background-color: #6366f1;
+    border-color: #6366f1;
+    /* We can't easily animate the knob in pure QSS without a custom widget, 
+       but we can use a different image or style to show state clearly. */
+}
+QCheckBox[class="switch"]::indicator:disabled {
+    background-color: #1a1a20;
+    border-color: #2a2a30;
+}
+
+/* Slider Style */
+QSlider::groove:horizontal {
+    border: 1px solid #282838;
+    height: 6px;
+    background: #1a1a25;
+    margin: 2px 0;
+    border-radius: 3px;
+}
+QSlider::handle:horizontal {
+    background: #f5f5f8;
+    border: 1px solid #f5f5f8;
+    width: 16px;
+    height: 16px;
+    margin: -6px 0;
+    border-radius: 8px;
+}
+QSlider::handle:horizontal:hover {
+    background: #ffffff;
+    border-color: #ffffff;
+    width: 18px;
+    height: 18px;
+    margin: -7px 0;
+    border-radius: 9px;
+}
+QSlider::handle:horizontal:pressed {
+    background: #6366f1;
+    border-color: #6366f1;
+}
+QSlider::sub-page:horizontal {
+    background: #6366f1;
+    border-radius: 3px;
+}
+QSlider::add-page:horizontal {
+    background: #1a1a25;
+    border-radius: 3px;
+}
+
+/* Section Header in Preferences */
+QLabel[class="pref-section-title"] {
+    font-size: 12px;
+    font-weight: 700;
+    color: #f5f5f8;
+    margin-top: 12px;
+    margin-bottom: 8px;
+}
+
 """

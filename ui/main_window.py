@@ -11,10 +11,9 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QFrame, QComboBox, QCheckBox, QRadioButton, QButtonGroup, QPlainTextEdit,
     QScrollArea, QFileDialog, QListWidget, QListWidgetItem, QProgressBar,
-    QSplitter, QSizePolicy, QGroupBox, QToolButton, QSpacerItem, QSlider, QLineEdit,
     QSplitter, QSizePolicy, QGroupBox, QToolButton, QSpacerItem, QSlider, QLineEdit,
     QTabWidget, QStackedWidget, QTimeEdit
 )
@@ -123,49 +122,6 @@ class DropZone(QFrame):
                 break
 
 
-class CollapsibleSection(QWidget):
-    """A collapsible section widget."""
-    
-    def __init__(self, title: str, parent=None):
-        super().__init__(parent)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        
-        # Header
-        header = QHBoxLayout()
-        
-        self.toggle_btn = QToolButton()
-        self.toggle_btn.setArrowType(Qt.DownArrow)
-        self.toggle_btn.setStyleSheet("background: transparent; border: none;")
-        self.toggle_btn.clicked.connect(self._toggle)
-        header.addWidget(self.toggle_btn)
-        
-        title_label = QLabel(title)
-        title_label.setStyleSheet("font-weight: bold; font-size: 12px; background: transparent;")
-        header.addWidget(title_label)
-        header.addStretch()
-        
-        layout.addLayout(header)
-        
-        # Content container
-        self.content = QWidget()
-        self.content_layout = QVBoxLayout(self.content)
-        self.content_layout.setContentsMargins(20, 0, 0, 0)
-        layout.addWidget(self.content)
-        
-        self._expanded = True
-    
-    def _toggle(self):
-        self._expanded = not self._expanded
-        self.content.setVisible(self._expanded)
-        self.toggle_btn.setArrowType(Qt.DownArrow if self._expanded else Qt.RightArrow)
-    
-    def add_widget(self, widget):
-        self.content_layout.addWidget(widget)
-
-
 class PreferencePanel(QFrame):
     """Preference manager panel for configuring filters."""
     
@@ -188,409 +144,297 @@ class PreferencePanel(QFrame):
     
     def _create_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(16)
+        layout.setSpacing(20)
+        layout.setContentsMargins(24, 24, 24, 24)
         
-        # Title
-        title = QLabel("Preference Manager")
-        title.setProperty("class", "section-header")
-        layout.addWidget(title)
+        # Header with Title
+        header = QHBoxLayout()
+        header.setSpacing(12)
         
-        # Video info (initially hidden)
-        self.video_info = QFrame()
-        self.video_info.setStyleSheet("background: #0f0f14; border-radius: 6px; padding: 12px;")
-        video_layout = QHBoxLayout(self.video_info)
+        title = QLabel("⚙️ Preferences")
+        title.setStyleSheet("font-size: 16px; font-weight: 700; color: #f5f5f8; background: transparent;")
+        header.addWidget(title)
+        header.addStretch()
         
-        self.video_icon = QLabel("📹")
-        self.video_icon.setStyleSheet("font-size: 24px; background: transparent;")
-        video_layout.addWidget(self.video_icon)
+        layout.addLayout(header)
         
-        video_text = QVBoxLayout()
-        self.video_name = QLabel("No video selected")
-        self.video_name.setStyleSheet("font-weight: bold; background: transparent;")
-        video_text.addWidget(self.video_name)
+        # Scroll Area for Content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
         
-        self.video_details = QLabel("")
-        self.video_details.setStyleSheet("color: #71717a; font-size: 11px; background: transparent;")
-        video_text.addWidget(self.video_details)
+        content_widget = QWidget()
+        self.content_layout = QVBoxLayout(content_widget)
+        self.content_layout.setSpacing(24)
+        self.content_layout.setContentsMargins(0, 0, 10, 0)
         
-        video_layout.addLayout(video_text)
-        video_layout.addStretch()
-        layout.addWidget(self.video_info)
-        
-        # Profile selector
+        # 1. Profile Section
         profile_layout = QHBoxLayout()
         profile_label = QLabel("Profile:")
-        profile_label.setStyleSheet("background: transparent;")
+        profile_label.setStyleSheet("font-weight: 600; color: #f5f5f8;")
         profile_layout.addWidget(profile_label)
         
         self.profile_combo = QComboBox()
+        self.profile_combo.setMinimumWidth(200)
         self.profile_combo.addItems(self.profile_manager.list_names())
         self.profile_combo.currentTextChanged.connect(self._on_profile_change)
-        profile_layout.addWidget(self.profile_combo, 1)
+        profile_layout.addWidget(self.profile_combo)
         
-        self.manage_btn = QPushButton("Manage")
-        self.manage_btn.setProperty("class", "secondary")
-        self.manage_btn.setFixedWidth(80)
+        self.manage_btn = QPushButton("manage")
+        self.manage_btn.setProperty("class", "link")
         profile_layout.addWidget(self.manage_btn)
         
-        layout.addLayout(profile_layout)
+        profile_layout.addStretch()
+        self.content_layout.addLayout(profile_layout)
         
-        # Scroll area for filters
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("border: none; background: transparent;")
+        # 2. Content Filters Section
+        filters_label = QLabel("Content Filters")
+        filters_label.setProperty("class", "pref-section-title")
+        self.content_layout.addWidget(filters_label)
         
-        filters_widget = QWidget()
-        filters_layout = QVBoxLayout(filters_widget)
-        filters_layout.setSpacing(12)
+        filters_grid = QGridLayout()
+        filters_grid.setSpacing(16)
         
-        # Content filter checkboxes
-        filters_header = QLabel("Content Filters")
-        filters_header.setProperty("class", "section-header")
-        filters_layout.addWidget(filters_header)
-        
-        self.cb_language = QCheckBox("🗣  Language (profanity, slurs)")
-        self.cb_language.setChecked(True)
-        filters_layout.addWidget(self.cb_language)
-        
-        self.cb_sexual = QCheckBox("💬  Sexual Content (dialogue)")
-        self.cb_sexual.setChecked(True)
-        filters_layout.addWidget(self.cb_sexual)
-        
-        self.cb_nudity = QCheckBox("👁  Nudity (visual)")
-        self.cb_nudity.setChecked(True)
-        filters_layout.addWidget(self.cb_nudity)
-        
-        self.cb_mature = QCheckBox("🚫  Mature Themes")
-        self.cb_mature.setEnabled(False)
-        self.cb_mature.setStyleSheet("color: #71717a;")
-        filters_layout.addWidget(self.cb_mature)
-        
-        # Romance intensity
-        romance_group = QGroupBox("💕  Romance Intensity")
-        romance_layout = QVBoxLayout(romance_group)
-        
-        self.romance_group = QButtonGroup(self)
-        self.rb_romance_keep = QRadioButton("Keep all")
-        self.rb_romance_heavy = QRadioButton("Remove explicit/heavy")
-        self.rb_romance_strict = QRadioButton("Remove kissing & strong romance")
-        
-        self.romance_group.addButton(self.rb_romance_keep, 0)
-        self.romance_group.addButton(self.rb_romance_heavy, 1)
-        self.romance_group.addButton(self.rb_romance_strict, 2)
-        
-        self.rb_romance_keep.setChecked(True)
-        
-        romance_layout.addWidget(self.rb_romance_keep)
-        romance_layout.addWidget(self.rb_romance_heavy)
-        romance_layout.addWidget(self.rb_romance_strict)
-        
-        filters_layout.addWidget(romance_group)
-        
-        # Violence intensity
-        violence_group = QGroupBox("🗡  Violence Intensity")
-        violence_layout = QVBoxLayout(violence_group)
-        
-        self.violence_group = QButtonGroup(self)
-        self.rb_violence_keep = QRadioButton("Keep all")
-        self.rb_violence_gore = QRadioButton("Remove graphic (gore, blood)")
-        self.rb_violence_death = QRadioButton("Remove death scenes")
-        self.rb_violence_fight = QRadioButton("Remove all fighting")
-        
-        self.violence_group.addButton(self.rb_violence_keep, 0)
-        self.violence_group.addButton(self.rb_violence_gore, 1)
-        self.violence_group.addButton(self.rb_violence_death, 2)
-        self.violence_group.addButton(self.rb_violence_fight, 3)
-        
-        self.rb_violence_keep.setChecked(True)
-        
-        violence_layout.addWidget(self.rb_violence_keep)
-        violence_layout.addWidget(self.rb_violence_gore)
-        violence_layout.addWidget(self.rb_violence_death)
-        violence_layout.addWidget(self.rb_violence_fight)
-        
-        filters_layout.addWidget(violence_group)
-        
-        # Custom phrases section
-        phrases_section = CollapsibleSection("📝  Custom Phrases")
-        
-        phrases_hint = QLabel("Words or sentences to mute/cut (one per line)")
-        phrases_hint.setStyleSheet("color: #71717a; font-size: 11px; background: transparent;")
-        phrases_section.add_widget(phrases_hint)
-        
-        self.phrases_edit = QPlainTextEdit()
-        self.phrases_edit.setPlaceholderText(
-            "Type or paste any words or sentences here\n"
-            "One per line\n"
-            "Example: stupid, oh my gosh, shut up"
+        # Language
+        self.cb_language = self._create_switch_card(
+            "Language", "Mute profanity", "cb_language", True
         )
-        self.phrases_edit.setMaximumHeight(100)
-        phrases_section.add_widget(self.phrases_edit)
+        filters_grid.addWidget(self.cb_language, 0, 0)
         
-        phrases_actions = QHBoxLayout()
-        open_file_btn = QPushButton("Open as text file…")
-        open_file_btn.setProperty("class", "link")
-        phrases_actions.addWidget(open_file_btn)
-        phrases_actions.addStretch()
+        # Sexual Content
+        self.cb_sexual = self._create_switch_card(
+            "Sexual Content", "Cut explicit scenes", "cb_sexual", True
+        )
+        filters_grid.addWidget(self.cb_sexual, 0, 1)
         
-        phrases_section.content_layout.addLayout(phrases_actions)
+        # Nudity
+        self.cb_nudity = self._create_switch_card(
+            "Nudity", "Visual detection", "cb_nudity", True
+        )
+        filters_grid.addWidget(self.cb_nudity, 1, 0)
         
-        filters_layout.addWidget(phrases_section)
+        # Mature Themes
+        self.cb_mature = self._create_switch_card(
+            "Mature Themes", "Drugs, self-harm", "cb_mature", False
+        )
+        filters_grid.addWidget(self.cb_mature, 1, 1)
         
-        # Safe cover section
-        safe_cover_layout = QHBoxLayout()
-        safe_cover_label = QLabel("🖼  Generate kid-friendly cover image")
-        safe_cover_label.setStyleSheet("background: transparent;")
-        safe_cover_layout.addWidget(safe_cover_label)
-        safe_cover_layout.addStretch()
+        self.content_layout.addLayout(filters_grid)
         
-        self.cb_safe_cover = QCheckBox()
-        safe_cover_layout.addWidget(self.cb_safe_cover)
+        # 3. Filter Intensity Section
+        intensity_label = QLabel("Filter Intensity")
+        intensity_label.setProperty("class", "pref-section-title")
+        self.content_layout.addWidget(intensity_label)
         
-        filters_layout.addLayout(safe_cover_layout)
+        self.romance_slider = self._create_intensity_slider(
+            "Romance Level", "romance_slider", 
+            ["Keep all", "Remove explicit", "Remove kissing"]
+        )
+        self.content_layout.addWidget(self.romance_slider)
         
-        # Save defaults button
-        save_defaults = QPushButton("💾  Save as profile defaults")
-        save_defaults.setProperty("class", "link")
-        save_defaults.clicked.connect(self._save_defaults)
-        filters_layout.addWidget(save_defaults)
+        self.violence_slider = self._create_intensity_slider(
+            "Violence Level", "violence_slider", 
+            ["Keep all", "Graphic", "Fighting", "Max"]
+        )
+        self.content_layout.addWidget(self.violence_slider)
+        
+        # 4. Filter Actions Section
+        actions_label = QLabel("Filter Actions")
+        actions_label.setProperty("class", "pref-section-title")
+        self.content_layout.addWidget(actions_label)
+        
+        actions_grid = QGridLayout()
+        actions_grid.setSpacing(16)
+        
+        self.combo_profanity = self._create_action_card(
+            "Profanity Action", "combo_profanity", ["Mute", "Beep"]
+        )
+        actions_grid.addWidget(self.combo_profanity, 0, 0)
+        
+        self.combo_nudity = self._create_action_card(
+            "Nudity Action", "combo_nudity", ["Cut", "Blur", "Blackout"]
+        )
+        actions_grid.addWidget(self.combo_nudity, 0, 1)
+        
+        self.combo_sexual = self._create_action_card(
+            "Sexual Content Action", "combo_sexual", ["Cut", "Blur", "Blackout"]
+        )
+        actions_grid.addWidget(self.combo_sexual, 1, 0)
+        
+        self.combo_violence = self._create_action_card(
+            "Violence Action", "combo_violence", ["Cut", "Blur", "Blackout"]
+        )
+        actions_grid.addWidget(self.combo_violence, 1, 1)
+        
+        self.content_layout.addLayout(actions_grid)
+        
+        # 5. Additional Options
+        options_label = QLabel("Additional Options")
+        options_label.setProperty("class", "pref-section-title")
+        self.content_layout.addWidget(options_label)
+        
+        options_grid = QGridLayout()
+        options_grid.setSpacing(16)
+        
+        self.cb_censor_subs = self._create_switch_card("Censor Subtitle Profanity", "", "cb_censor_subs", True, horizontal=True)
+        options_grid.addWidget(self.cb_censor_subs, 0, 0)
+        
+        self.cb_safe_cover = self._create_switch_card("Safe Cover Image", "", "cb_safe_cover", False, horizontal=True)
+        options_grid.addWidget(self.cb_safe_cover, 0, 1)
+        
+        self.cb_force_eng = self._create_switch_card("Force English Subtitles", "", "cb_force_eng", False, horizontal=True)
+        options_grid.addWidget(self.cb_force_eng, 1, 0)
 
-        # Output Quality Section
-        tk_sep = QFrame()
-        tk_sep.setFrameShape(QFrame.HLine)
-        tk_sep.setFrameShadow(QFrame.Sunken)
-        tk_sep.setStyleSheet("background: #2a2a35; margin-top: 10px; margin-bottom: 10px;")
-        filters_layout.addWidget(tk_sep)
+        # Legacy items reserved in Additional Options
+        self.cb_community = self._create_switch_card("Community Timestamps", "", "cb_community", True, horizontal=True)
+        options_grid.addWidget(self.cb_community, 1, 1)
         
-        quality_header = QLabel("Output Quality")
-        quality_header.setProperty("class", "section-header")
-        filters_layout.addWidget(quality_header)
+        # Whisper Model Selection (Advanced)
+        whisper_widget = QFrame()
+        whisper_widget.setProperty("class", "filter-card")
+        w_layout = QHBoxLayout(whisper_widget)
+        w_layout.setContentsMargins(0, 0, 0, 0)
+        w_label = QLabel("Speech Model:")
+        w_label.setStyleSheet("font-size: 11px; font-weight: 600; color: #a0a0b0;")
+        w_layout.addWidget(w_label)
         
-        # Quality Preset Dropdown (replaces CRF/Target Size)
-        preset_row = QHBoxLayout()
-        preset_row.addWidget(QLabel("Quality:"))
-        
-        self.quality_preset_combo = QComboBox()
-        self.quality_preset_combo.setMinimumWidth(250)
-        
-        # Quality presets with resolution and bitrate info
-        self.quality_presets = [
-            ("Play Original Quality", "original"),
-            ("Convert Automatically", "auto"),
-            ("Convert to 4K UHD (High)  40 Mbps", "4k_high"),
-            ("Convert to 4K UHD (Medium)  24 Mbps", "4k_med"),
-            ("Convert to 4K UHD  18 Mbps", "4k_low"),
-            ("Convert to 1080p HD (High)  20 Mbps", "1080p_high"),
-            ("Convert to 1080p HD (Medium)  12 Mbps", "1080p_med"),
-            ("Convert to 1080p HD  10 Mbps", "1080p_10"),
-            ("Convert to 1080p HD  8 Mbps", "1080p_low"),
-            ("Convert to 720p HD (High)  4 Mbps", "720p_high"),
-            ("Convert to 720p HD (Medium)  3 Mbps", "720p_med"),
-            ("Convert to 720p HD  2 Mbps", "720p_low"),
-            ("Convert to 480p  1.5 Mbps", "480p"),
-            ("Convert to 328p  0.7 Mbps", "328p"),
-            ("Convert to 240p  0.3 Mbps", "240p"),
-            ("Convert to 160p  0.2 Mbps", "160p"),
+        self.whisper_models = [
+            ("Large-v3", "large-v3"),
+            ("Medium", "medium"),
+            ("Small", "small"),
+            ("Base", "base"),
+            ("Tiny", "tiny"),
         ]
-        
-        for display_name, _ in self.quality_presets:
-            self.quality_preset_combo.addItem(display_name)
-        
-        preset_row.addWidget(self.quality_preset_combo)
-        preset_row.addStretch()
-        
-        filters_layout.addLayout(preset_row)
-        
-        # Performance Mode Row
-        perf_row = QHBoxLayout()
-        perf_row.addWidget(QLabel("Performance:"))
-        
-        self.performance_combo = QComboBox()
-        self.performance_combo.addItem("Balanced (Default)", "balanced")
-        self.performance_combo.addItem("⚡ Low Power (For Mac Mini/Air)", "low_power")
-        self.performance_combo.addItem("🚀 High Performance", "high_performance")
-        self.performance_combo.setMinimumWidth(200)
-        perf_row.addWidget(self.performance_combo)
-
-        perf_hint = QLabel("Low Power uses less RAM & CPU")
-        perf_hint.setStyleSheet("color: #71717a; font-size: 10px; font-style: italic;")
-        perf_row.addWidget(perf_hint)
-        
-        perf_row.addStretch()
-        filters_layout.addLayout(perf_row)
-
-        # Resolution & Speed Row
-        res_speed_row = QHBoxLayout()
-        
-        # Resolution
-        res_speed_row.addWidget(QLabel("Resolution:"))
-        self.resolution_combo = QComboBox()
-        self.resolution_combo.addItems(["Original", "4K (2160p)", "1080p", "720p", "480p"])
-        self.resolution_combo.setFixedWidth(120)
-        res_speed_row.addWidget(self.resolution_combo)
-        
-        res_speed_row.addSpacing(20)
-        
-        # Encoding Speed
-        res_speed_row.addWidget(QLabel("Speed:"))
-        
-        self.speed_combo = QComboBox()
-        self.speed_combo.addItems([
-            "veryslow", "slower", "slow", "medium", "fast", "faster", "veryfast", "superfast", "ultrafast"
-        ])
-        self.speed_combo.setFixedWidth(110)
-        res_speed_row.addWidget(self.speed_combo)
-        
-        res_speed_row.addStretch()
-        filters_layout.addLayout(res_speed_row)
-        
-        # Video Codec Row
-        codec_row = QHBoxLayout()
-        codec_row.addWidget(QLabel("Video Codec:"))
-        
-        self.codec_combo = QComboBox()
-        self.video_codecs = [
-            ("H.264 (Best Compatibility)", "libx264"),
-            ("H.265/HEVC (Smaller Files)", "libx265"),
-        ]
-        for display_name, _ in self.video_codecs:
-            self.codec_combo.addItem(display_name)
-        self.codec_combo.setMinimumWidth(200)
-        codec_row.addWidget(self.codec_combo)
-        
-        codec_hint = QLabel("H.265 = ~40% smaller, slightly less compatible")
-        codec_hint.setStyleSheet("color: #71717a; font-size: 10px; font-style: italic;")
-        codec_row.addWidget(codec_hint)
-        
-        codec_row.addStretch()
-        filters_layout.addLayout(codec_row)
-        
-        # Output Format Row
-        format_row = QHBoxLayout()
-        format_row.addWidget(QLabel("Output Format:"))
-        
-        self.format_combo = QComboBox()
-        self.format_combo.addItems(["mp4", "mkv", "avi", "mov"])
-        self.format_combo.setFixedWidth(80)
-        format_row.addWidget(self.format_combo)
-        
-        format_hint = QLabel("(Container format for output file)")
-        format_hint.setStyleSheet("color: #71717a; font-size: 10px; font-style: italic;")
-        format_row.addWidget(format_hint)
-        
-        format_row.addStretch()
-        filters_layout.addLayout(format_row)
-        
-        # Whisper Model Size Row (Speech Recognition)
-        whisper_sep = QFrame()
-        whisper_sep.setFrameShape(QFrame.HLine)
-        whisper_sep.setFrameShadow(QFrame.Sunken)
-        whisper_sep.setStyleSheet("background: #2a2a35; margin-top: 10px; margin-bottom: 10px;")
-        filters_layout.addWidget(whisper_sep)
-        
-        whisper_header = QLabel("Speech Recognition")
-        whisper_header.setProperty("class", "section-header")
-        filters_layout.addWidget(whisper_header)
-        
-        whisper_row = QHBoxLayout()
-        whisper_row.addWidget(QLabel("Whisper Model:"))
         
         self.whisper_combo = QComboBox()
-        self.whisper_models = [
-            ("Large-v3 (Most Accurate)", "large-v3"),
-            ("Medium (Balanced)", "medium"),
-            ("Small (Faster)", "small"),
-            ("Base (Fast)", "base"),
-            ("Tiny (Fastest)", "tiny"),
-        ]
-        for display_name, _ in self.whisper_models:
-            self.whisper_combo.addItem(display_name)
-        self.whisper_combo.setMinimumWidth(200)
-        whisper_row.addWidget(self.whisper_combo)
+        self.whisper_combo.addItems([name for name, _ in self.whisper_models])
+        w_layout.addWidget(self.whisper_combo)
+        options_grid.addWidget(whisper_widget, 2, 0)
         
-        whisper_hint = QLabel("Larger = more accurate, slower")
-        whisper_hint.setStyleSheet("color: #71717a; font-size: 10px; font-style: italic;")
-        whisper_row.addWidget(whisper_hint)
+        # Performance Mode (Advanced)
+        perf_widget = QFrame()
+        perf_widget.setProperty("class", "filter-card")
+        p_layout = QHBoxLayout(perf_widget)
+        p_layout.setContentsMargins(0, 0, 0, 0)
+        p_label = QLabel("Performance:")
+        p_label.setStyleSheet("font-size: 11px; font-weight: 600; color: #a0a0b0;")
+        p_layout.addWidget(p_label)
         
-        whisper_row.addStretch()
-        filters_layout.addLayout(whisper_row)
+        self.performance_combo = QComboBox()
+        self.performance_combo.addItem("Balanced", "balanced")
+        self.performance_combo.addItem("Performance", "performance")
+        self.performance_combo.addItem("High Quality", "quality")
+        p_layout.addWidget(self.performance_combo)
+        options_grid.addWidget(perf_widget, 2, 1)
+
+        self.content_layout.addLayout(options_grid)
         
-        # Notifications Section
-        notify_sep = QFrame()
-        notify_sep.setFixedHeight(1)
-        notify_sep.setStyleSheet("background: #2a2a35; margin-top: 10px; margin-bottom: 10px;")
-        filters_layout.addWidget(notify_sep)
+        # Custom Phrases (Preserved functionality)
+        phrases_widget = QFrame()
+        phrases_widget.setProperty("class", "filter-card")
+        ph_layout = QVBoxLayout(phrases_widget)
+        ph_layout.setContentsMargins(12, 12, 12, 12)
+        ph_layout.setSpacing(6)
         
-        notify_header = QLabel("Notifications")
-        notify_header.setProperty("class", "section-header")
-        filters_layout.addWidget(notify_header)
+        ph_header = QHBoxLayout()
+        ph_title = QLabel("Custom Block Phrases")
+        ph_title.setStyleSheet("font-weight: 600; font-size: 11px; color: #a0a0b0;")
+        ph_header.addWidget(ph_title)
+        ph_hit = QLabel("(one per line)")
+        ph_hit.setStyleSheet("font-size: 10px; color: #5a5a6a;")
+        ph_header.addWidget(ph_hit)
+        ph_header.addStretch()
+        ph_layout.addLayout(ph_header)
         
-        notify_layout = QVBoxLayout()
-        notify_layout.setSpacing(8)
-        
-        self.cb_notify_enabled = QCheckBox("Enable Mobile Notifications")
-        notify_layout.addWidget(self.cb_notify_enabled)
-        
-        topic_layout = QHBoxLayout()
-        topic_layout.addWidget(QLabel("ntfy.sh Topic:"))
-        self.notify_topic_input = QLineEdit()
-        self.notify_topic_input.setPlaceholderText("e.g. videocensor-ryan-9928")
-        self.notify_topic_input.setStyleSheet("""
-            QLineEdit {
-                background: #1f1f2e;
+        self.phrases_edit = QPlainTextEdit()
+        self.phrases_edit.setPlaceholderText("e.g. stupid, shut up")
+        self.phrases_edit.setMaximumHeight(60)
+        self.phrases_edit.setStyleSheet("""
+            QPlainTextEdit {
+                background: #0f0f14;
                 color: #e0e0e0;
-                border: 1px solid #383850;
-                border-radius: 4px;
+                border: 1px solid #282838;
+                border-radius: 6px;
                 padding: 6px;
+                font-size: 11px;
             }
+            QPlainTextEdit:focus { border-color: #3b82f6; }
         """)
-        topic_layout.addWidget(self.notify_topic_input)
+        ph_layout.addWidget(self.phrases_edit)
+        self.content_layout.addWidget(phrases_widget)
         
-        notify_layout.addLayout(topic_layout)
-        notify_hint = QLabel("Download 'ntfy' app on phone & subscribe to this topic")
-        notify_hint.setStyleSheet("color: #71717a; font-size: 10px; font-style: italic;")
-        notify_layout.addWidget(notify_hint)
+        # Notifications (Preserved functionality)
+        notify_widget = QFrame()
+        notify_widget.setProperty("class", "filter-card")
+        n_layout = QVBoxLayout(notify_widget)
+        n_layout.setContentsMargins(12, 12, 12, 12)
+        n_layout.setSpacing(8)
         
-        filters_layout.addLayout(notify_layout)
+        n_header = QHBoxLayout()
+        n_label = QLabel("Notifications")
+        n_label.setStyleSheet("font-weight: 600; font-size: 11px; color: #a0a0b0;")
+        n_header.addWidget(n_label)
+        n_header.addStretch()
+        self.cb_notify_enabled = QCheckBox("Enable Push")
+        self.cb_notify_enabled.setStyleSheet("color: #b0b0c0; font-size: 11px;")
+        self.cb_notify_enabled.stateChanged.connect(self._save_settings)
+        n_header.addWidget(self.cb_notify_enabled)
+        n_layout.addLayout(n_header)
         
-        # Initialize values from config
-        self._init_quality_from_config()
+        # Topic Input
+        topic_row = QHBoxLayout()
+        self.notify_topic_input = QLineEdit()
+        self.notify_topic_input.setPlaceholderText("Ntfy Topic ID")
+        self.notify_topic_input.setStyleSheet("background: #0f0f14; border: 1px solid #282838; border-radius: 4px; padding: 4px; color: #e0e0e0; font-size: 11px;")
+        self.notify_topic_input.editingFinished.connect(self._save_settings)
+        topic_row.addWidget(self.notify_topic_input)
         
-        filters_layout.addStretch()
+        test_btn = QPushButton("Test")
+        test_btn.setFixedWidth(50)
+        test_btn.setStyleSheet("background: #3b82f6; border: none; border-radius: 4px; padding: 4px; font-size: 10px; color: white;")
+        test_btn.clicked.connect(self._test_notification)
+        topic_row.addWidget(test_btn)
+        n_layout.addLayout(topic_row)
         
-        scroll.setWidget(filters_widget)
-        layout.addWidget(scroll, 1)
+        # Checkboxes
+        opts_row = QHBoxLayout()
+        self.cb_notify_complete = QCheckBox("Done")
+        self.cb_notify_complete.setStyleSheet("color: #b0b0c0; font-size: 10px;")
+        self.cb_notify_complete.stateChanged.connect(self._save_settings)
+        opts_row.addWidget(self.cb_notify_complete)
         
-        # Start button - primary gradient style
+        self.cb_notify_error = QCheckBox("Error")
+        self.cb_notify_error.setStyleSheet("color: #b0b0c0; font-size: 10px;")
+        self.cb_notify_error.stateChanged.connect(self._save_settings)
+        opts_row.addWidget(self.cb_notify_error)
+        
+        self.cb_notify_batch = QCheckBox("Batch")
+        self.cb_notify_batch.setStyleSheet("color: #b0b0c0; font-size: 10px;")
+        self.cb_notify_batch.stateChanged.connect(self._save_settings)
+        opts_row.addWidget(self.cb_notify_batch)
+        
+        n_layout.addLayout(opts_row)
+        self.content_layout.addWidget(notify_widget)
+        
+        self.content_layout.addStretch()
+        
+        scroll.setWidget(content_widget)
+        layout.addWidget(scroll)
+        
+        # Footer Section
+        footer = QVBoxLayout()
+        footer.setSpacing(12)
+        
+        # Start button
         self.start_btn = QPushButton("▶  Start Filtering")
         self.start_btn.setProperty("class", "primary")
         self.start_btn.setEnabled(False)
-        self.start_btn.setMinimumHeight(52)
-        self.start_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #3b82f6, stop:0.5 #6366f1, stop:1 #8b5cf6);
-                font-size: 15px;
-                font-weight: 600;
-                border-radius: 10px;
-                letter-spacing: 0.3px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #60a5fa, stop:0.5 #818cf8, stop:1 #a78bfa);
-            }
-            QPushButton:disabled {
-                background: #1f1f2a;
-                color: #4a4a5a;
-            }
-        """)
+        self.start_btn.setMinimumHeight(48)
         self.start_btn.clicked.connect(self._on_start)
-        layout.addWidget(self.start_btn)
+        footer.addWidget(self.start_btn)
         
-        # Schedule Option
+        # Schedule
         schedule_layout = QHBoxLayout()
-        schedule_layout.addStretch()
-        
         self.schedule_cb = QCheckBox("Schedule Start:")
         self.schedule_cb.setStyleSheet("color: #b0b0c0; font-size: 11px;")
         self.schedule_cb.toggled.connect(self._toggle_schedule)
@@ -598,7 +442,7 @@ class PreferencePanel(QFrame):
         
         self.time_edit = QTimeEdit()
         self.time_edit.setDisplayFormat("h:mm AP")
-        self.time_edit.setTime(QTime.currentTime().addSecs(3600)) # Default to 1 hour from now
+        self.time_edit.setTime(QTime.currentTime().addSecs(3600))
         self.time_edit.setEnabled(False)
         self.time_edit.setStyleSheet("""
             QTimeEdit {
@@ -608,25 +452,149 @@ class PreferencePanel(QFrame):
                 border-radius: 4px;
                 padding: 2px 4px;
             }
-            QTimeEdit:disabled {
-                color: #555;
-                border-color: #2a2a35;
-            }
+            QTimeEdit:disabled { color: #555; border-color: #2a2a35; }
         """)
         schedule_layout.addWidget(self.time_edit)
         schedule_layout.addStretch()
+        footer.addLayout(schedule_layout)
         
-        layout.addLayout(schedule_layout)
+        layout.addLayout(footer)
         
-        # Apply initial profile
+        # Initialize
+        self._init_quality_from_config()
         self._apply_profile_settings()
+
+    def _create_switch_card(self, title, subtitle, object_name, checked=False, horizontal=False):
+        """Create a card with title, subtitle and switch."""
+        card = QFrame()
+        card.setProperty("class", "filter-card")
         
+        if horizontal:
+            layout = QHBoxLayout(card)
+            layout.setContentsMargins(0, 0, 0, 0)
+            
+            label = QLabel(title)
+            label.setStyleSheet("font-weight: 600; font-size: 12px;")
+            layout.addWidget(label)
+            
+            layout.addStretch()
+            
+            switch = QCheckBox()
+            switch.setObjectName(object_name)
+            switch.setProperty("class", "switch")
+            switch.setChecked(checked)
+            layout.addWidget(switch)
+            
+            # Store reference
+            setattr(self, object_name, switch)
+        else:
+            layout = QHBoxLayout(card)
+            layout.setContentsMargins(0, 0, 0, 0)
+            
+            text_layout = QVBoxLayout()
+            text_layout.setSpacing(4)
+            
+            t_label = QLabel(title)
+            t_label.setStyleSheet("font-weight: 600; font-size: 12px;")
+            text_layout.addWidget(t_label)
+            
+            if subtitle:
+                s_label = QLabel(subtitle)
+                s_label.setStyleSheet("color: #71717a; font-size: 10px;")
+                text_layout.addWidget(s_label)
+            
+            layout.addLayout(text_layout)
+            layout.addStretch()
+            
+            switch = QCheckBox()
+            switch.setObjectName(object_name)
+            switch.setProperty("class", "switch")
+            switch.setChecked(checked)
+            layout.addWidget(switch)
+            
+            # Store reference
+            setattr(self, object_name, switch)
+            
+        return card
+
+    def _create_intensity_slider(self, title, object_name, steps):
+        """Create a slider card with labels."""
+        card = QFrame()
+        card.setProperty("class", "filter-card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        header = QHBoxLayout()
+        t_label = QLabel(title)
+        t_label.setStyleSheet("font-weight: 600; font-size: 12px;")
+        header.addWidget(t_label)
+        header.addStretch()
+        
+        status_label = QLabel(steps[-1])
+        status_label.setStyleSheet("color: #3b82f6; font-size: 10px; font-weight: 600;")
+        header.addWidget(status_label)
+        layout.addLayout(header)
+        
+        slider = QSlider(Qt.Horizontal)
+        slider.setMinimum(0)
+        slider.setMaximum(len(steps) - 1)
+        slider.setTickPosition(QSlider.TicksBelow)
+        slider.setTickInterval(1)
+        slider.setValue(len(steps) - 1)
+        layout.addWidget(slider)
+        
+        # Labels row
+        labels_layout = QHBoxLayout()
+        labels_layout.setContentsMargins(4, 0, 4, 0)
+        for i, step in enumerate(steps):
+            lbl = QLabel(step)
+            lbl.setStyleSheet("color: #71717a; font-size: 9px;")
+            if i == 0:
+                lbl.setAlignment(Qt.AlignLeft)
+            elif i == len(steps) - 1:
+                lbl.setAlignment(Qt.AlignRight)
+            else:
+                lbl.setAlignment(Qt.AlignCenter)
+            labels_layout.addWidget(lbl)
+            if i < len(steps) - 1:
+                labels_layout.addStretch()
+                
+        layout.addLayout(labels_layout)
+        
+        # Update status label on change
+        def update_status(val):
+            status_label.setText(steps[val])
+            
+        slider.valueChanged.connect(update_status)
+        update_status(slider.value())
+        
+        setattr(self, object_name, slider)
+        return card
+
+    def _create_action_card(self, title, object_name, options):
+        """Create a card for filter actions."""
+        card = QFrame()
+        card.setProperty("class", "filter-card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        
+        t_label = QLabel(title)
+        t_label.setStyleSheet("font-weight: 600; font-size: 11px; color: #a0a0b0;")
+        layout.addWidget(t_label)
+        
+        combo = QComboBox()
+        combo.addItems(options)
+        layout.addWidget(combo)
+        
+        setattr(self, object_name, combo)
+        return card
+
     def _toggle_schedule(self, checked):
         self.time_edit.setEnabled(checked)
         if checked:
             self.start_btn.setText("⏰  Schedule Job")
             self.time_edit.setFocus()
-            # Select the hour section for immediate editing
             self.time_edit.setSelectedSection(QTimeEdit.Section.HourSection)
         else:
             self.start_btn.setText("▶  Start Filtering")
@@ -634,22 +602,6 @@ class PreferencePanel(QFrame):
     def set_video(self, path: str):
         """Set the current video file."""
         self.current_video_path = path
-        filename = Path(path).name
-        
-        # Get file size
-        try:
-            size = os.path.getsize(path)
-            if size < 1024 * 1024:
-                size_str = f"{size / 1024:.1f} KB"
-            elif size < 1024 * 1024 * 1024:
-                size_str = f"{size / (1024 * 1024):.1f} MB"
-            else:
-                size_str = f"{size / (1024 * 1024 * 1024):.2f} GB"
-        except:
-            size_str = ""
-        
-        self.video_name.setText(filename)
-        self.video_details.setText(size_str)
         self.start_btn.setEnabled(True)
     
     def _on_profile_change(self, name: str):
@@ -660,30 +612,35 @@ class PreferencePanel(QFrame):
         profile = self.profile_manager.get_or_default(profile_name)
         settings = profile.settings
         
-        self.cb_language.setChecked(settings.filter_language)
-        self.cb_sexual.setChecked(settings.filter_sexual_content)
-        self.cb_nudity.setChecked(settings.filter_nudity)
-        self.cb_mature.setChecked(settings.filter_mature_themes)
+        self.cb_language.findChild(QCheckBox).setChecked(settings.filter_language)
+        self.cb_sexual.findChild(QCheckBox).setChecked(settings.filter_sexual_content)
+        self.cb_nudity.findChild(QCheckBox).setChecked(settings.filter_nudity)
+        self.cb_mature.findChild(QCheckBox).setChecked(settings.filter_mature_themes)
         
-        self.romance_group.button(settings.filter_romance_level).setChecked(True)
-        self.violence_group.button(settings.filter_violence_level).setChecked(True)
+        # Map levels to slider values
+        # Assuming backend stores level 0-N
+        self.romance_slider.findChild(QSlider).setValue(settings.filter_romance_level)
+        self.violence_slider.findChild(QSlider).setValue(settings.filter_violence_level)
         
+        # Safe Cover
+        self.cb_safe_cover.findChild(QCheckBox).setChecked(settings.safe_cover_enabled)
+        
+        # Custom Phrases
         self.phrases_edit.setPlainText("\n".join(settings.custom_block_phrases))
-        self.cb_safe_cover.setChecked(settings.safe_cover_enabled)
     
     def get_current_settings(self) -> ContentFilterSettings:
         """Get the current filter settings from controls."""
         phrases = [p.strip() for p in self.phrases_edit.toPlainText().split("\n") if p.strip()]
         
         return ContentFilterSettings(
-            filter_language=self.cb_language.isChecked(),
-            filter_sexual_content=self.cb_sexual.isChecked(),
-            filter_nudity=self.cb_nudity.isChecked(),
-            filter_romance_level=self.romance_group.checkedId(),
-            filter_violence_level=self.violence_group.checkedId(),
-            filter_mature_themes=self.cb_mature.isChecked(),
+            filter_language=self.cb_language.findChild(QCheckBox).isChecked(),
+            filter_sexual_content=self.cb_sexual.findChild(QCheckBox).isChecked(),
+            filter_nudity=self.cb_nudity.findChild(QCheckBox).isChecked(),
+            filter_romance_level=self.romance_slider.findChild(QSlider).value(),
+            filter_violence_level=self.violence_slider.findChild(QSlider).value(),
+            filter_mature_themes=self.cb_mature.findChild(QCheckBox).isChecked(),
             custom_block_phrases=phrases,
-            safe_cover_enabled=self.cb_safe_cover.isChecked()
+            safe_cover_enabled=self.cb_safe_cover.findChild(QCheckBox).isChecked()
         )
     
     def _save_defaults(self):
@@ -695,19 +652,15 @@ class PreferencePanel(QFrame):
     
     def _on_start(self):
         if self.current_video_path:
-            # Save global quality settings first
             self.save_quality_to_config()
             
-            # Get schedule time if enabled
             scheduled_time = None
             if self.schedule_cb.isChecked():
-                from datetime import datetime
+                from datetime import datetime, timedelta
                 qtime = self.time_edit.time()
                 now = datetime.now()
                 scheduled_time = now.replace(hour=qtime.hour(), minute=qtime.minute(), second=0, microsecond=0)
-                # If time is earlier than now, assume tomorrow
                 if scheduled_time < now:
-                    from datetime import timedelta
                     scheduled_time += timedelta(days=1)
             
             settings = self.get_current_settings()
@@ -718,43 +671,18 @@ class PreferencePanel(QFrame):
                 scheduled_time
             )
             self.current_video_path = None
-            self.video_name.setText("No video selected")
-            self.video_details.setText("")
             self.start_btn.setEnabled(False)
-            
-            # Reset schedule UI
             self.schedule_cb.setChecked(False)
-    
+            
     def refresh_profiles(self):
-        """Refresh the profile dropdown."""
         current = self.profile_combo.currentText()
         self.profile_combo.clear()
         self.profile_combo.addItems(self.profile_manager.list_names())
-        
         idx = self.profile_combo.findText(current)
         if idx >= 0:
             self.profile_combo.setCurrentIndex(idx)
             
     def _init_quality_from_config(self):
-        # Set values from self.config
-        preset_key = getattr(self.config.output, 'quality_preset', 'original')
-        
-        # Find matching preset index
-        for i, (display_name, key) in enumerate(self.quality_presets):
-            if key == preset_key:
-                self.quality_preset_combo.setCurrentIndex(i)
-                break
-        
-        # Set video format
-        self.format_combo.setCurrentText(self.config.output.video_format)
-        
-        # Set video codec
-        codec_key = getattr(self.config.output, 'video_codec', 'libx264')
-        for i, (display_name, key) in enumerate(self.video_codecs):
-            if key == codec_key:
-                self.codec_combo.setCurrentIndex(i)
-                break
-        
         # Set whisper model
         whisper_model = getattr(self.config.whisper, 'model_size', 'large-v3')
         for i, (display_name, key) in enumerate(self.whisper_models):
@@ -765,6 +693,9 @@ class PreferencePanel(QFrame):
         # Set notifications
         self.cb_notify_enabled.setChecked(self.config.notifications.enabled)
         self.notify_topic_input.setText(self.config.notifications.ntfy_topic)
+        self.cb_notify_complete.setChecked(getattr(self.config.notifications, 'notify_on_complete', True))
+        self.cb_notify_error.setChecked(getattr(self.config.notifications, 'notify_on_error', True))
+        self.cb_notify_batch.setChecked(getattr(self.config.notifications, 'notify_on_batch_done', True))
         
         # Set performance mode
         perf_mode = getattr(self.config.system, 'performance_mode', 'balanced')
@@ -773,23 +704,26 @@ class PreferencePanel(QFrame):
             self.performance_combo.setCurrentIndex(index)
         
         
+    def _save_settings(self):
+        """Save notification and other settings when changed."""
+        # Save notifications
+        self.config.notifications.enabled = self.cb_notify_enabled.isChecked()
+        self.config.notifications.ntfy_topic = self.notify_topic_input.text().strip()
+        self.config.notifications.notify_on_complete = self.cb_notify_complete.isChecked()
+        self.config.notifications.notify_on_error = self.cb_notify_error.isChecked()
+        self.config.notifications.notify_on_batch_done = self.cb_notify_batch.isChecked()
+        
+        # Save performance mode
+        self.config.system.performance_mode = self.performance_combo.currentData()
+        
+        try:
+            config_path = Path(__file__).parent.parent / "config.yaml"
+            self.config.save(config_path)
+        except Exception as e:
+            print(f"Failed to save settings: {e}")
+    
     def save_quality_to_config(self):
         """Save current quality settings to self.config and disk."""
-        # Get selected preset key
-        idx = self.quality_preset_combo.currentIndex()
-        if 0 <= idx < len(self.quality_presets):
-            _, preset_key = self.quality_presets[idx]
-            self.config.output.quality_preset = preset_key
-        
-        # Save video format
-        self.config.output.video_format = self.format_combo.currentText()
-        
-        # Save video codec
-        codec_idx = self.codec_combo.currentIndex()
-        if 0 <= codec_idx < len(self.video_codecs):
-            _, codec_key = self.video_codecs[codec_idx]
-            self.config.output.video_codec = codec_key
-        
         # Save whisper model
         whisper_idx = self.whisper_combo.currentIndex()
         if 0 <= whisper_idx < len(self.whisper_models):
@@ -799,16 +733,78 @@ class PreferencePanel(QFrame):
         # Save notifications
         self.config.notifications.enabled = self.cb_notify_enabled.isChecked()
         self.config.notifications.ntfy_topic = self.notify_topic_input.text().strip()
+        self.config.notifications.notify_on_complete = self.cb_notify_complete.isChecked()
+        self.config.notifications.notify_on_error = self.cb_notify_error.isChecked()
+        self.config.notifications.notify_on_batch_done = self.cb_notify_batch.isChecked()
         
         # Save performance mode
         self.config.system.performance_mode = self.performance_combo.currentData()
-
         
         try:
             config_path = Path(__file__).parent.parent / "config.yaml"
             self.config.save(config_path)
         except Exception as e:
             print(f"Failed to save config: {e}")
+    
+    def _test_notification(self):
+        """Send a test notification to verify setup."""
+        topic = self.notify_topic_input.text().strip()
+        if not topic:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "No Topic", "Please enter a topic ID first!")
+            return
+        
+        try:
+            import requests
+            url = f"https://ntfy.sh/{topic}"
+            response = requests.post(
+                url,
+                data="🎬 Test notification from Video Censor! If you see this, notifications are working.",
+                headers={
+                    "Title": "✅ Test Successful!",
+                    "Tags": "white_check_mark,movie_camera"
+                },
+                timeout=5
+            )
+            
+            if response.status_code == 200:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.information(self, "Success", "Test notification sent! Check your phone.")
+            else:
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Error", f"Server returned status {response.status_code}")
+        except Exception as e:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Error", f"Failed to send: {str(e)}")
+    
+    def _open_community_dialog(self):
+        """Open the community timestamps browser dialog."""
+        from video_censor.community_dialog import CommunityDialog
+        
+        dialog = CommunityDialog(self)
+        dialog.timestamps_selected.connect(self._on_community_timestamps_selected)
+        dialog.exec()
+    
+    def _on_community_timestamps_selected(self, detection_data: dict):
+        """Handle selection of community timestamps."""
+        # Store the selected community data for use during processing
+        self._community_detection = detection_data
+        
+        from PySide6.QtWidgets import QMessageBox
+        title = detection_data.get('title', 'Unknown')
+        nudity = len(detection_data.get('nudity_segments', []))
+        profanity = len(detection_data.get('profanity_segments', []))
+        sexual = len(detection_data.get('sexual_content_segments', []))
+        
+        QMessageBox.information(
+            self,
+            "Timestamps Loaded",
+            f"Loaded community timestamps for '{title}':\n\n"
+            f"• {profanity} profanity segments\n"
+            f"• {nudity} nudity segments\n"
+            f"• {sexual} sexual content segments\n\n"
+            "These will be applied when processing starts."
+        )
 
 
 class QueueItemWidget(QFrame):
@@ -1848,25 +1844,38 @@ class MainWindow(QMainWindow):
         """Send push notification via ntfy.sh if enabled."""
         try:
             config = self.preference_panel.config
+            print(f"[NOTIFY DEBUG] Attempting notification: status={status}")
+            print(f"[NOTIFY DEBUG] enabled={config.notifications.enabled}")
+            print(f"[NOTIFY DEBUG] topic={config.notifications.ntfy_topic}")
+            print(f"[NOTIFY DEBUG] notify_on_complete={config.notifications.notify_on_complete}")
+            
             if not config.notifications.enabled:
+                print("[NOTIFY DEBUG] Skipped: notifications disabled")
+                return
+            
+            if not config.notifications.ntfy_topic:
+                print("[NOTIFY DEBUG] Skipped: no ntfy topic configured")
                 return
             
             from video_censor.notifier import get_notifier
             notifier = get_notifier(config)
             
             if status == "complete" and config.notifications.notify_on_complete:
+                print(f"[NOTIFY DEBUG] Sending completion notification for {item.filename}")
                 notifier.send(
-                    title=f"Processing Complete: {item.filename}",
-                    message=f"Finished in {item.duration_str}",
+                    title=f"✅ {item.filename}",
+                    message=f"Processing complete! Finished in {item.duration_str}",
                 )
+                print("[NOTIFY DEBUG] Notification sent successfully")
             elif status == "failed" and config.notifications.notify_on_error:
+                print(f"[NOTIFY DEBUG] Sending error notification for {item.filename}")
                 notifier.send(
-                    title=f"Processing Failed: {item.filename}",
+                    title=f"❌ {item.filename}",
                     message=f"Error: {error[:100]}",
                     priority="high"
                 )
         except Exception as e:
-            print(f"Failed to send notification: {e}")
+            print(f"[NOTIFY DEBUG] Failed to send notification: {e}")
     
     def _send_batch_complete_notification(self):
         """Send notification when entire batch is finished."""

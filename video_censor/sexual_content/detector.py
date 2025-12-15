@@ -26,9 +26,13 @@ from ..profanity.detector import normalize_word, generate_word_variants
 from .lexicon import (
     DEFAULT_SEXUAL_TERMS,
     DEFAULT_SEXUAL_PHRASES,
+    DEFAULT_SEXUAL_PATTERNS,
     CATEGORY_WEIGHTS,
     CATEGORY_MINORS_UNSAFE,
     get_category_weight,
+    check_context_modifiers,
+    calculate_safe_context_modifier,
+    RegexPattern,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,15 +48,19 @@ class SexualContentMatch:
     """A matched sexual content term or phrase."""
     text: str
     category: str
-    match_type: str  # "word" or "phrase"
+    match_type: str  # "word", "phrase", "regex", or "pattern"
     start: float
     end: float
     weight: float = 1.0
+    context_modifier: float = 1.0  # Applied by context analysis
+    suppressed: bool = False  # True if context suppressed this match
     
     @property
     def score(self) -> float:
-        """Calculate score for this match."""
-        return self.weight
+        """Calculate score for this match (0 if suppressed)."""
+        if self.suppressed:
+            return 0.0
+        return self.weight * self.context_modifier
 
 
 @dataclass
@@ -62,21 +70,56 @@ class SegmentScore:
     end: float
     text: str
     matches: List[SexualContentMatch] = field(default_factory=list)
+    safe_context_modifier: float = 1.0  # Reduction from safe context detection
+    
+    @property
+    def raw_score(self) -> float:
+        """Calculate raw score from all matches (before safe context modifier)."""
+        return sum(m.score for m in self.matches)
     
     @property
     def total_score(self) -> float:
-        """Calculate total score from all matches."""
-        return sum(m.score for m in self.matches)
+        """Calculate total score with all modifiers applied."""
+        return self.raw_score * self.safe_context_modifier
+    
+    @property
+    def confidence(self) -> float:
+        """Return confidence as 0.0-1.0 value for UI display."""
+        # Normalize score to confidence (cap at 1.0)
+        # Score of 2.0+ = very confident, 1.0 = moderately confident
+        raw = self.total_score
+        if raw <= 0:
+            return 0.0
+        elif raw >= 2.0:
+            return 1.0
+        else:
+            return min(1.0, raw / 2.0)
+    
+    @property
+    def confidence_level(self) -> str:
+        """Human-readable confidence level."""
+        c = self.confidence
+        if c >= 0.8:
+            return "high"
+        elif c >= 0.5:
+            return "medium"
+        else:
+            return "low"
     
     @property
     def has_unsafe_content(self) -> bool:
         """Check if segment has minors/unsafe content."""
-        return any(m.category == CATEGORY_MINORS_UNSAFE for m in self.matches)
+        return any(m.category == CATEGORY_MINORS_UNSAFE and not m.suppressed for m in self.matches)
     
     @property
     def categories(self) -> Set[str]:
-        """Get all matched categories."""
-        return {m.category for m in self.matches}
+        """Get all matched categories (excluding suppressed)."""
+        return {m.category for m in self.matches if not m.suppressed}
+    
+    @property
+    def active_match_count(self) -> int:
+        """Count of non-suppressed matches."""
+        return sum(1 for m in self.matches if not m.suppressed)
 
 
 class SexualContentDebugger:
@@ -158,9 +201,13 @@ class SexualContentDetector:
         self,
         terms: Optional[Dict[str, str]] = None,
         phrases: Optional[List[Tuple[List[str], str]]] = None,
+        patterns: Optional[List[RegexPattern]] = None,
         threshold: float = 1.0,
         unsafe_threshold: float = 0.5,
-        context_window: int = 0,
+        context_window: int = 5,
+        use_context_modifiers: bool = True,
+        use_safe_context: bool = True,
+        use_regex_patterns: bool = True,
         debug: bool = False
     ):
         """
@@ -169,16 +216,24 @@ class SexualContentDetector:
         Args:
             terms: Dict mapping terms to categories
             phrases: List of (phrase_words, category) tuples
+            patterns: List of RegexPattern objects for advanced matching
             threshold: Score threshold for flagging (default 1.0)
             unsafe_threshold: Threshold for minors/unsafe content (default 0.5 = more aggressive)
-            context_window: Number of adjacent segments to consider (0 = none)
+            context_window: Number of words around a match to check for context (default 5)
+            use_context_modifiers: Apply context-aware suppression/amplification
+            use_safe_context: Apply safe context detection (medical/educational/news)
+            use_regex_patterns: Use regex patterns for leetspeak detection
             debug: Enable debug logging
         """
         self.terms = terms if terms is not None else DEFAULT_SEXUAL_TERMS.copy()
         self.phrases = phrases if phrases is not None else list(DEFAULT_SEXUAL_PHRASES)
+        self.patterns = patterns if patterns is not None else list(DEFAULT_SEXUAL_PATTERNS)
         self.threshold = threshold
         self.unsafe_threshold = unsafe_threshold
         self.context_window = context_window
+        self.use_context_modifiers = use_context_modifiers
+        self.use_safe_context = use_safe_context
+        self.use_regex_patterns = use_regex_patterns
         self.debug = debug or DEBUG_SEXUAL_CONTENT
         self.debugger = SexualContentDebugger(enabled=self.debug)
         
@@ -252,6 +307,58 @@ class SexualContentDetector:
         
         return matches
     
+    def _match_regex_patterns(self, text: str) -> List[SexualContentMatch]:
+        """
+        Find regex pattern matches in segment text.
+        
+        Args:
+            text: Full segment text
+            
+        Returns:
+            List of regex matches
+        """
+        if not self.use_regex_patterns:
+            return []
+        
+        matches = []
+        for pattern in self.patterns:
+            for start_pos, end_pos, matched_text in pattern.find_matches(text):
+                matches.append(SexualContentMatch(
+                    text=matched_text,
+                    category=pattern.category,
+                    match_type="regex",
+                    start=0.0,  # Will be approximated from context
+                    end=0.0,
+                    weight=pattern.weight * get_category_weight(pattern.category)
+                ))
+        
+        return matches
+    
+    def _apply_context_modifiers(
+        self,
+        matches: List[SexualContentMatch],
+        segment_words: List[WordTimestamp]
+    ) -> None:
+        """
+        Apply context modifiers to matches in-place.
+        
+        Args:
+            matches: List of matches to modify
+            segment_words: Words in the segment for context
+        """
+        if not self.use_context_modifiers:
+            return
+        
+        # Build context word list
+        context_words = [w.word.lower() for w in segment_words]
+        
+        for match in matches:
+            if match.match_type in ("word", "phrase"):
+                modifier = check_context_modifiers(match.text, context_words, self.context_window)
+                match.context_modifier = modifier
+                if modifier == 0.0:
+                    match.suppressed = True
+    
     def analyze_segment(
         self,
         words: List[WordTimestamp],
@@ -277,6 +384,7 @@ class SexualContentDetector:
         segment_start = segment_words[0].start
         segment_end = segment_words[-1].end
         segment_text = ' '.join(w.word for w in segment_words)
+        word_list = [w.word for w in segment_words]
         
         matches: List[SexualContentMatch] = []
         
@@ -298,11 +406,28 @@ class SexualContentDetector:
         phrase_matches = self._match_phrases(words, start_idx, end_idx)
         matches.extend(phrase_matches)
         
+        # Find regex pattern matches
+        regex_matches = self._match_regex_patterns(segment_text)
+        for rm in regex_matches:
+            # Approximate timestamps from segment
+            rm.start = segment_start
+            rm.end = segment_end
+        matches.extend(regex_matches)
+        
+        # Apply context modifiers (suppress/amplify based on surrounding words)
+        self._apply_context_modifiers(matches, segment_words)
+        
+        # Calculate safe context modifier
+        safe_modifier = 1.0
+        if self.use_safe_context:
+            safe_modifier = calculate_safe_context_modifier(word_list)
+        
         return SegmentScore(
             start=segment_start,
             end=segment_end,
             text=segment_text,
-            matches=matches
+            matches=matches,
+            safe_context_modifier=safe_modifier
         )
     
     def should_flag_segment(self, segment: SegmentScore) -> bool:
@@ -315,7 +440,8 @@ class SexualContentDetector:
         Returns:
             True if segment should be cut
         """
-        if not segment.matches:
+        # No active matches after context filtering
+        if segment.active_match_count == 0:
             return False
         
         # Always flag unsafe content with lower threshold
@@ -370,15 +496,28 @@ class SexualContentDetector:
             self.debugger.log_segment(segment_score, flagged, threshold)
             
             if flagged:
-                # Create cut interval for entire segment
+                # Build reason from non-suppressed matches only
+                active_matches = [m for m in segment_score.matches if not m.suppressed]
+                match_summary = ', '.join(m.text for m in active_matches[:3])
+                
+                # Create cut interval for entire segment with confidence metadata
                 interval = TimeInterval(
                     start=segment_score.start,
                     end=segment_score.end,
-                    reason=f"sexual content: {', '.join(m.text for m in segment_score.matches[:3])}"
+                    reason=f"sexual content: {match_summary}",
+                    metadata={
+                        'confidence': segment_score.confidence,
+                        'confidence_level': segment_score.confidence_level,
+                        'score': segment_score.total_score,
+                        'match_count': segment_score.active_match_count,
+                        'categories': list(segment_score.categories),
+                        'safe_context_modifier': segment_score.safe_context_modifier,
+                    }
                 )
                 intervals.append(interval)
                 
-                logger.debug(f"Flagged sexual content at {segment_score.start:.2f}s: "
+                logger.debug(f"Flagged sexual content at {segment_score.start:.2f}s "
+                           f"(confidence={segment_score.confidence:.2f}): "
                            f"{segment_score.text[:50]}...")
         
         # Write debug summary

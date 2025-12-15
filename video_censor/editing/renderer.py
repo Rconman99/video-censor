@@ -321,7 +321,12 @@ def extract_segment(
     # SMART RENDERING: Choose the fastest method
     if not has_audio_edits and not must_reencode_video:
         # CASE 1: PURE STREAM COPY (fastest - no encoding at all)
-        cmd = ['ffmpeg'] + common_args + ['-c', 'copy', str(output_path)]
+        # Use -fflags +genpts to regenerate timestamps and avoid muxing errors
+        cmd = ['ffmpeg', '-fflags', '+genpts'] + common_args + [
+            '-avoid_negative_ts', 'make_zero',
+            '-c', 'copy', 
+            str(output_path)
+        ]
         method = "stream-copy"
         
     elif has_audio_edits and not must_reencode_video:
