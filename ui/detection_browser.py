@@ -311,18 +311,38 @@ class DetectionCard(QFrame):
         self.total = total
         self._is_selected = False
         
+        # Determine confidence color (red=high, yellow=medium, green=low)
+        confidence = segment.get('confidence', 0.8)
+        if confidence >= 0.8:
+            border_color = "#ef4444"  # Red - high confidence
+        elif confidence >= 0.5:
+            border_color = "#fbbf24"  # Yellow - medium
+        else:
+            border_color = "#22c55e"  # Green - low confidence
+        
+        # Determine detection type icon
+        det_type = segment.get('type', '')
+        if det_type == 'nudity' or 'nudity' in str(segment.get('source', '')):
+            self.type_icon = "👁"  # Visual
+        elif det_type == 'profanity' or 'profanity' in str(segment.get('source', '')):
+            self.type_icon = "🔊"  # Audio
+        elif det_type == 'both':
+            self.type_icon = "⚠️"  # Both
+        else:
+            self.type_icon = "🔍"  # Unknown
+        
         self.setProperty("class", "detection-card")
-        self.setStyleSheet("""
-            QFrame[class="detection-card"] {
+        self.setStyleSheet(f"""
+            QFrame[class="detection-card"] {{
                 background: #1a1a24;
-                border: 1px solid #2a2a38;
+                border: 2px solid {border_color};
                 border-radius: 8px;
                 padding: 12px;
-            }
-            QFrame[class="detection-card"]:hover {
+            }}
+            QFrame[class="detection-card"]:hover {{
                 border-color: #3b82f6;
                 background: #1f1f2a;
-            }
+            }}
         """)
         self.setCursor(Qt.PointingHandCursor)
         
@@ -592,11 +612,15 @@ class DetectionBrowserPanel(QFrame):
         
         self.current_track = None
         self.current_index = 0
+        self.current_card_index = 0  # For keyboard navigation
         self.cards = []  # Current review card widgets
         self.selected_segments = set()  # Track selected segment IDs
         self.scene_mode = False  # Scene grouping mode
         self.scene_gap = 5.0  # Default scene gap in seconds
         self.scenes = []  # Grouped scenes for current track
+        
+        # Enable keyboard focus
+        self.setFocusPolicy(Qt.StrongFocus)
         
         self._create_ui()
         
@@ -1276,3 +1300,126 @@ class DetectionBrowserPanel(QFrame):
             result[track_key] = kept + to_review
             
         return result
+    
+    # ========== KEYBOARD SHORTCUTS ==========
+    
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts for quick review.
+        
+        Shortcuts:
+            Space - Seek to current detection
+            ← → - Navigate prev/next detection
+            K - Keep current detection
+            S - Skip (delete) current detection
+            E - Expand region +0.5s each side
+            R - Reduce region -0.5s each side
+        """
+        key = event.key()
+        
+        # Get current card if available
+        current_card = None
+        if self.cards and 0 <= self.current_card_index < len(self.cards):
+            current_card = self.cards[self.current_card_index]
+        
+        if key == Qt.Key_Space:
+            if current_card and hasattr(current_card, 'segment'):
+                self.seek_to_segment.emit(current_card.segment)
+            event.accept()
+        elif key == Qt.Key_Left:
+            self._navigate_prev()
+            event.accept()
+        elif key == Qt.Key_Right:
+            self._navigate_next()
+            event.accept()
+        elif key == Qt.Key_K:
+            if current_card and hasattr(current_card, 'segment'):
+                self._on_keep(current_card.segment)
+                self._navigate_next()
+            event.accept()
+        elif key == Qt.Key_S:
+            if current_card and hasattr(current_card, 'segment'):
+                self._on_delete(current_card.segment)
+            event.accept()
+        elif key == Qt.Key_E:
+            if current_card and hasattr(current_card, 'segment'):
+                self._expand_region(current_card.segment)
+            event.accept()
+        elif key == Qt.Key_R:
+            if current_card and hasattr(current_card, 'segment'):
+                self._reduce_region(current_card.segment)
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+    
+    def _navigate_prev(self):
+        """Navigate to previous detection card."""
+        if self.cards and self.current_card_index > 0:
+            self.current_card_index -= 1
+            self._highlight_current_card()
+    
+    def _navigate_next(self):
+        """Navigate to next detection card."""
+        if self.cards and self.current_card_index < len(self.cards) - 1:
+            self.current_card_index += 1
+            self._highlight_current_card()
+    
+    def _highlight_current_card(self):
+        """Highlight the current card and seek to it."""
+        for i, card in enumerate(self.cards):
+            if hasattr(card, 'set_highlighted'):
+                card.set_highlighted(i == self.current_card_index)
+        
+        if self.cards and 0 <= self.current_card_index < len(self.cards):
+            card = self.cards[self.current_card_index]
+            if hasattr(card, 'segment'):
+                self.seek_to_segment.emit(card.segment)
+    
+    def _expand_region(self, segment: dict):
+        """Expand detection region by 0.5s on each side."""
+        if 'start' in segment and 'end' in segment:
+            segment['start'] = max(0, segment['start'] - 0.5)
+            segment['end'] = segment['end'] + 0.5
+            self._refresh_all_sections()
+    
+    def _reduce_region(self, segment: dict):
+        """Reduce detection region by 0.5s on each side."""
+        if 'start' in segment and 'end' in segment:
+            new_start = segment['start'] + 0.5
+            new_end = segment['end'] - 0.5
+            if new_start < new_end:
+                segment['start'] = new_start
+                segment['end'] = new_end
+                self._refresh_all_sections()
+    
+    # ========== BATCH ACTIONS ==========
+    
+    def skip_low_confidence(self, threshold: float = 0.5):
+        """Skip all detections with confidence below threshold."""
+        if not self.current_track:
+            return
+        to_review = list(self.data.get(self.current_track, []))
+        for s in to_review:
+            if s.get('confidence', 1.0) < threshold:
+                self._on_delete(s)
+    
+    def confirm_high_confidence(self, threshold: float = 0.8):
+        """Confirm all detections with confidence above threshold."""
+        if not self.current_track:
+            return
+        to_review = list(self.data.get(self.current_track, []))
+        for s in to_review:
+            if s.get('confidence', 1.0) >= threshold:
+                self._on_keep(s)
+    
+    def skip_audio_only(self):
+        """Skip all audio-only (profanity) detections."""
+        if self.current_track == 'profanity':
+            for s in list(self.data.get(self.current_track, [])):
+                self._on_delete(s)
+    
+    def skip_visual_only(self):
+        """Skip all visual-only (nudity) detections."""
+        if self.current_track == 'nudity':
+            for s in list(self.data.get(self.current_track, [])):
+                self._on_delete(s)
+
