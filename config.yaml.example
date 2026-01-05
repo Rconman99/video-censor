@@ -53,3 +53,12 @@ whisper:
   compute_type: int8
   language: en
   model_size: large-v3
+
+# LLM-based context analysis (optional)
+# Use to reduce false positives by checking if profanity is quoted/discussed
+llm:
+  enabled: false  # Set to true to enable
+  provider: ollama  # ollama, anthropic, openai
+  model: ""  # Leave empty for provider default, or specify model
+  api_key: ""  # Required for anthropic/openai
+  timeout: 5  # Seconds per request

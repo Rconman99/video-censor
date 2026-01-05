@@ -20,6 +20,16 @@ class SystemConfig:
     performance_mode: str = "low_power"  # high, balanced, low_power
 
 
+@dataclass
+class LLMConfig:
+    """Configuration for LLM-based context analysis."""
+    enabled: bool = False  # Opt-in feature
+    provider: str = "ollama"  # ollama, anthropic, openai
+    model: str = ""  # Empty = use provider default
+    api_key: str = ""  # Required for anthropic/openai
+    timeout: int = 5  # Seconds per request
+
+
 
 @dataclass
 class ProfanityConfig:
@@ -35,6 +45,8 @@ class ProfanityConfig:
     # Dynamic buffer: add extra buffer based on word length
     dynamic_buffer: bool = True
     dynamic_buffer_factor: float = 0.02  # Extra seconds per character
+    # LLM-based context analysis (requires llm.enabled = true)
+    context_aware: bool = False  # Check if profanity is quoted/discussed
 
 
 @dataclass
@@ -58,6 +70,8 @@ class NudityConfig:
     max_aspect_ratio: float = 4.0  # Maximum allowed aspect ratio (rejects extreme shapes)
     # Scene grouping for review - merge detections within this gap into one scene
     scene_gap: float = 5.0  # Seconds between detections to group as one scene
+    # Adaptive sampling - sample more frequently during scene changes
+    adaptive_sampling: bool = False  # Enable smart frame sampling
 
     def __post_init__(self):
         if self.body_parts is None:
@@ -173,6 +187,7 @@ class Config:
     content_lookup: ContentLookupConfig = field(default_factory=ContentLookupConfig)
     community: CommunityConfig = field(default_factory=CommunityConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
     
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "Config":
@@ -247,6 +262,12 @@ class Config:
                 for key, value in data['community'].items():
                     if hasattr(config.community, key):
                         setattr(config.community, key, value)
+            
+            # Update LLM config
+            if 'llm' in data:
+                for key, value in data['llm'].items():
+                    if hasattr(config.llm, key):
+                        setattr(config.llm, key, value)
         
         return config
     

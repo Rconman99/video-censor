@@ -34,3 +34,10 @@ supabase>=2.0.0
 # Adds ~200MB to install size, but enables 88%+ accuracy detection
 # Install with: pip install sentence-transformers
 # sentence-transformers>=2.2.0
+
+# Optional: LLM providers for context-aware profanity detection
+# Install based on your preference:
+# ollama>=0.3.0        # Local LLM (recommended, free)
+# anthropic>=0.34.0    # Claude API
+# openai>=1.0.0        # OpenAI API
+

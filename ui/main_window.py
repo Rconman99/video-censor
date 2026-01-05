@@ -902,6 +902,28 @@ class QueueItemWidget(QFrame):
         self.cancel_btn.setVisible(item.is_processing)
         progress_row.addWidget(self.cancel_btn)
         
+        # Delete Button (always visible for non-processing items)
+        self.delete_btn = QPushButton("🗑")
+        self.delete_btn.setToolTip("Remove from Queue")
+        self.delete_btn.setFixedSize(24, 24)
+        self.delete_btn.setStyleSheet("""
+            QPushButton {
+                background: #1f1f2e;
+                color: #71717a;
+                border: 1px solid #282838;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: #3a2424;
+                color: #ff6666;
+                border-color: #483030;
+            }
+        """)
+        self.delete_btn.clicked.connect(self._on_delete_clicked)
+        self.delete_btn.setVisible(not item.is_processing)
+        progress_row.addWidget(self.delete_btn)
+        
         layout.addLayout(progress_row)
         
     def _on_review_clicked(self):
@@ -914,6 +936,12 @@ class QueueItemWidget(QFrame):
         window = self.window()
         if hasattr(window, '_cancel_current_job'):
             window._cancel_current_job(self.item.id)
+    
+    def _on_delete_clicked(self):
+        """Delete this item from the queue."""
+        window = self.window()
+        if hasattr(window, '_delete_queue_item'):
+            window._delete_queue_item(self.item.id)
     
     def _status_color(self) -> str:
         colors = {
@@ -935,6 +963,10 @@ class QueueItemWidget(QFrame):
             
         if hasattr(self, 'cancel_btn'):
             self.cancel_btn.setVisible(self.item.is_processing)
+        
+        if hasattr(self, 'delete_btn'):
+            # Show delete for anything not actively processing
+            self.delete_btn.setVisible(not self.item.is_processing)
 
 
 class QueuePanel(QFrame):
@@ -1885,6 +1917,19 @@ class MainWindow(QMainWindow):
             except:
                 pass
         self.current_process = None
+    
+    def _delete_queue_item(self, item_id: str):
+        """Delete an item from the queue."""
+        item = self.processing_queue.get(item_id)
+        if item:
+            # Don't delete if currently processing
+            if item.is_processing:
+                return
+            
+            self.processing_queue.remove(item_id)
+            self.processing_queue.save_state()
+            self.queue_panel.refresh()
+            print(f"Deleted queue item: {item.filename}")
 
     @Slot(str)
     def on_item_complete(self, item_id: str):
