@@ -281,7 +281,8 @@ def _analyze_audio(input_path: Path, temp_dir: Path, config: Config, subtitles_p
         audio_path,
         model_size=config.whisper.model_size,
         language=config.whisper.language,
-        compute_type=config.whisper.compute_type
+        compute_type=config.whisper.compute_type,
+        progress_prefix="[AUDIO]"
     )
     
     # Load profanity list
@@ -344,7 +345,8 @@ def _analyze_video(input_path: Path, temp_dir: Path, config: Config, show_progre
         min_cut_duration=config.nudity.min_cut_duration,
         min_box_area_percent=config.nudity.min_box_area_percent,
         max_aspect_ratio=config.nudity.max_aspect_ratio,
-        show_progress=show_progress
+        show_progress=show_progress,
+        progress_prefix="[VIDEO]"
     )
     
     logger.info(f"Found {len(nudity_intervals)} nudity intervals")
@@ -393,47 +395,79 @@ def analyze_content(
     
     futures = {}
     
-    # Determine max workers based on performance mode
+    # Determine max workers based on performance config
     max_workers = 3
-    if config.system.performance_mode == "low_power":
+    if not config.performance.parallel_detection:
+        max_workers = 1
+    elif config.system.performance_mode == "low_power":
         max_workers = 1
         logger.info("Low Power Mode: Using serial execution (max_workers=1)")
     
-    with ThreadPoolExecutor(max_workers=max_workers) as executor: # Increased workers for subtitles
-        if run_audio:
-            futures['audio'] = executor.submit(
-                _analyze_audio, input_path, temp_dir, config, subtitles_path
-            )
+    # Use ProcessPoolExecutor for true parallelism
+    from concurrent.futures import ProcessPoolExecutor
+    import time
+    
+    attempts = 0
+    max_attempts = 2 if config.performance.fallback_to_sequential and max_workers > 1 else 1
+    
+    while attempts < max_attempts:
+        attempts += 1
+        current_workers = max_workers if attempts == 1 else 1
+        
+        if attempts > 1:
+            logger.warning("⚠️  Fallback: Retrying with sequential execution (max_workers=1)...")
             
-        if run_video:
-            futures['video'] = executor.submit(
-                _analyze_video, input_path, temp_dir, config, show_progress
-            )
+        futures = {}
+        
+        try:
+            with ProcessPoolExecutor(max_workers=current_workers) as executor:
+                if run_audio:
+                    # Pass progress prefix for audio
+                    futures['audio'] = executor.submit(
+                        _analyze_audio, input_path, temp_dir, config, subtitles_path
+                    )
+                    
+                    # Stagger delay to prevent GPU memory spike if parallel
+                    if current_workers > 1 and run_video and config.performance.stagger_delay > 0:
+                        logger.debug(f"Staggering video detection start by {config.performance.stagger_delay}s...")
+                        time.sleep(config.performance.stagger_delay)
+                    
+                if run_video:
+                    futures['video'] = executor.submit(
+                        _analyze_video, input_path, temp_dir, config, show_progress
+                    )
+                    
+                # Subtitle Analysis
+                if filter_settings and filter_settings.force_english_subtitles:
+                     sub_extract_path = temp_dir / "analysis_subtitles.srt"
+                     futures['subtitles'] = executor.submit(
+                         extract_english_subtitles, input_path, sub_extract_path
+                     )
+        
+                # Collect results
+                for name, future in futures.items():
+                    result = future.result()
+                    if name == 'audio':
+                        profanity_intervals, words = result
+                    elif name == 'video':
+                        nudity_intervals, frames = result
+                    elif name == 'subtitles':
+                        subtitle_path = result
             
-        # Subtitle Analysis (Parallel)
-        subtitle_path = None
-        if filter_settings and filter_settings.force_english_subtitles:
-             # Check if we can/should extract subtitles for analysis
-             # Note: We extract to a specific filename for consistency
-             sub_extract_path = temp_dir / "analysis_subtitles.srt"
-             futures['subtitles'] = executor.submit(
-                 extract_english_subtitles, input_path, sub_extract_path
-             )
-
-        # Collect results
-        for name, future in futures.items():
-            try:
-                result = future.result()
-                if name == 'audio':
-                    profanity_intervals, words = result
-                elif name == 'video':
-                    nudity_intervals, frames = result
-                elif name == 'subtitles':
-                    subtitle_path = result
-            except Exception as e:
-                logger.error(f"Error in {name} analysis: {e}")
-                # Don't crash entire pipeline for one failure, unless critical?
-                # For now, log and continue. Audio/Video are critical though.
+            # If we got here, success!
+            break
+            
+        except Exception as e:
+            logger.error(f"Error during {'parallel' if current_workers > 1 else 'sequential'} analysis: {e}")
+            if attempts < max_attempts:
+                # Clear partial results before retry
+                profanity_intervals = []
+                words = []
+                nudity_intervals = []
+                frames = []
+                continue
+            else:
+                # If critical failure, re-raise
                 if name in ('audio', 'video') and not (skip_profanity and skip_nudity):
                      raise
 

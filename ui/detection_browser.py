@@ -20,501 +20,9 @@ try:
 except ImportError:
     HAS_SCENE_GROUPING = False
 
-
-class MiniDetectionCard(QFrame):
-    """A compact card for kept/deleted sections."""
-    
-    restore_clicked = Signal(object)  # Emits segment
-    card_clicked = Signal(object)  # For seeking to segment
-    
-    def __init__(self, segment: dict, status: str, parent=None):
-        super().__init__(parent)
-        self.segment = segment
-        self.status = status  # 'kept' or 'deleted'
-        
-        self.setStyleSheet(f"""
-            QFrame {{
-                background: {'#1a2e1a' if status == 'kept' else '#2e1a1a'};
-                border: 1px solid {'#22c55e40' if status == 'kept' else '#ef444440'};
-                border-radius: 6px;
-                padding: 6px;
-            }}
-            QFrame:hover {{
-                background: {'#1f3a1f' if status == 'kept' else '#3a1f1f'};
-            }}
-        """)
-        self.setCursor(Qt.PointingHandCursor)
-        
-        self._create_ui()
-        
-    def _create_ui(self):
-        layout = QHBoxLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(8, 6, 8, 6)
-        
-        # Status icon
-        icon = "✓" if self.status == 'kept' else "✗"
-        icon_color = "#22c55e" if self.status == 'kept' else "#ef4444"
-        icon_label = QLabel(icon)
-        icon_label.setStyleSheet(f"color: {icon_color}; font-size: 14px; font-weight: bold;")
-        layout.addWidget(icon_label)
-        
-        # Time range
-        start = self._format_time(self.segment.get('start', 0))
-        end = self._format_time(self.segment.get('end', 0))
-        time_label = QLabel(f"{start} → {end}")
-        time_label.setStyleSheet("color: #a0a0b0; font-size: 10px;")
-        layout.addWidget(time_label)
-        
-        # Reason (truncated)
-        reason = self.segment.get('label', self.segment.get('reason', ''))[:30]
-        if reason:
-            reason_label = QLabel(reason)
-            reason_label.setStyleSheet("color: #71717a; font-size: 10px;")
-            layout.addWidget(reason_label)
-        
-        layout.addStretch()
-        
-        # Restore button
-        restore_btn = QPushButton("↩")
-        restore_btn.setToolTip("Restore to review")
-        restore_btn.setFixedSize(24, 24)
-        restore_btn.setStyleSheet("""
-            QPushButton {
-                background: #3a3a48;
-                color: #a0a0b0;
-                border: none;
-                border-radius: 4px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background: #4a4a58;
-                color: #f0f0f0;
-            }
-        """)
-        restore_btn.clicked.connect(lambda: self.restore_clicked.emit(self.segment))
-        layout.addWidget(restore_btn)
-        
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.card_clicked.emit(self.segment)
-        super().mousePressEvent(event)
-        
-    def _format_time(self, seconds: float) -> str:
-        m, s = divmod(int(seconds), 60)
-        h, m = divmod(m, 60)
-        if h > 0:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m}:{s:02d}"
-
-
-class SceneCard(QFrame):
-    """A card displaying a scene (group of detections) with expand/collapse."""
-    
-    keep_clicked = Signal(object)  # Emits scene
-    delete_clicked = Signal(object)  # Emits scene
-    card_clicked = Signal(object)  # For seeking to scene start
-    selection_changed = Signal(object, bool)  # (scene, is_selected)
-    
-    def __init__(self, scene, index: int, total: int, parent=None):
-        super().__init__(parent)
-        self.scene = scene
-        self.index = index
-        self.total = total
-        self._is_selected = False
-        self._is_expanded = False
-        
-        self.setProperty("class", "scene-card")
-        self.setStyleSheet("""
-            QFrame[class="scene-card"] {
-                background: #1a1a24;
-                border: 2px solid #8b5cf6;
-                border-radius: 10px;
-                padding: 12px;
-            }
-            QFrame[class="scene-card"]:hover {
-                border-color: #a78bfa;
-                background: #1f1f2a;
-            }
-        """)
-        self.setCursor(Qt.PointingHandCursor)
-        
-        self._create_ui()
-        
-    def _create_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(12, 10, 12, 10)
-        
-        # Header with checkbox, scene icon, and time range
-        header = QHBoxLayout()
-        
-        # Selection checkbox
-        self.checkbox = QCheckBox()
-        self.checkbox.setStyleSheet("""
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 4px;
-                border: 2px solid #8b5cf6;
-                background: #1a1a24;
-            }
-            QCheckBox::indicator:checked {
-                background: #8b5cf6;
-                border-color: #8b5cf6;
-            }
-        """)
-        self.checkbox.stateChanged.connect(self._on_checkbox_changed)
-        header.addWidget(self.checkbox)
-        
-        # Scene icon and number
-        scene_label = QLabel(f"🎬 Scene {self.index + 1} of {self.total}")
-        scene_label.setStyleSheet("color: #a78bfa; font-size: 12px; font-weight: 700;")
-        header.addWidget(scene_label)
-        
-        header.addStretch()
-        
-        # Time range
-        start = self._format_time(self.scene.start)
-        end = self._format_time(self.scene.end)
-        duration = self.scene.duration
-        time_label = QLabel(f"⏱ {start} → {end} ({duration:.1f}s)")
-        time_label.setStyleSheet("color: #8b5cf6; font-size: 11px; font-weight: 600;")
-        header.addWidget(time_label)
-        
-        layout.addLayout(header)
-        
-        # Detection count info
-        count_label = QLabel(f"Contains {self.scene.detection_count} detection{'s' if self.scene.detection_count != 1 else ''}")
-        count_label.setStyleSheet("color: #a0a0b0; font-size: 11px;")
-        layout.addWidget(count_label)
-        
-        # Expand/collapse button and detections container
-        self.expand_btn = QPushButton("▶ Show detections")
-        self.expand_btn.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                color: #71717a;
-                border: none;
-                text-align: left;
-                padding: 4px 0;
-                font-size: 10px;
-            }
-            QPushButton:hover {
-                color: #a0a0b0;
-            }
-        """)
-        self.expand_btn.clicked.connect(self._toggle_expand)
-        layout.addWidget(self.expand_btn)
-        
-        # Detections container (hidden by default)
-        self.detections_container = QWidget()
-        self.detections_layout = QVBoxLayout(self.detections_container)
-        self.detections_layout.setSpacing(4)
-        self.detections_layout.setContentsMargins(8, 4, 0, 4)
-        self.detections_container.setVisible(False)
-        
-        # Populate with detection mini-cards
-        for det in self.scene.detections:
-            det_info = QLabel(f"• {self._format_time(det.start)} - {self._format_time(det.end)}: {det.reason[:40]}")
-            det_info.setStyleSheet("color: #71717a; font-size: 10px;")
-            self.detections_layout.addWidget(det_info)
-        
-        layout.addWidget(self.detections_container)
-        
-        # Action buttons
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
-        
-        self.keep_btn = QPushButton("✓ Keep Scene")
-        self.keep_btn.setStyleSheet("""
-            QPushButton {
-                background: #22c55e;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-weight: 600;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background: #16a34a;
-            }
-        """)
-        self.keep_btn.clicked.connect(lambda: self.keep_clicked.emit(self.scene))
-        actions.addWidget(self.keep_btn)
-        
-        self.delete_btn = QPushButton("✗ Delete Scene")
-        self.delete_btn.setStyleSheet("""
-            QPushButton {
-                background: #ef4444;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-weight: 600;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background: #dc2626;
-            }
-        """)
-        self.delete_btn.clicked.connect(lambda: self.delete_clicked.emit(self.scene))
-        actions.addWidget(self.delete_btn)
-        
-        layout.addLayout(actions)
-        
-    def _toggle_expand(self):
-        self._is_expanded = not self._is_expanded
-        self.detections_container.setVisible(self._is_expanded)
-        self.expand_btn.setText("▼ Hide detections" if self._is_expanded else "▶ Show detections")
-        
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            # Create a segment-like dict for seeking
-            self.card_clicked.emit({'start': self.scene.start, 'end': self.scene.end})
-        super().mousePressEvent(event)
-        
-    def _format_time(self, seconds: float) -> str:
-        m, s = divmod(int(seconds), 60)
-        h, m = divmod(m, 60)
-        if h > 0:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m}:{s:02d}"
-    
-    def _on_checkbox_changed(self, state):
-        self._is_selected = state == Qt.Checked
-        self.selection_changed.emit(self.scene, self._is_selected)
-        
-    def set_selected(self, selected: bool):
-        self._is_selected = selected
-        self.checkbox.blockSignals(True)
-        self.checkbox.setChecked(selected)
-        self.checkbox.blockSignals(False)
-        
-    def is_selected(self) -> bool:
-        return self._is_selected
-
-
-class DetectionCard(QFrame):
-    """A card displaying a single detection with actions and selection checkbox."""
-    
-    keep_clicked = Signal(object)  # Emits segment
-    delete_clicked = Signal(object)  # Emits segment
-    card_clicked = Signal(object)  # For seeking to segment
-    selection_changed = Signal(object, bool)  # (segment, is_selected)
-    
-    def __init__(self, segment: dict, index: int, total: int, parent=None):
-        super().__init__(parent)
-        self.segment = segment
-        self.index = index
-        self.total = total
-        self._is_selected = False
-        
-        # Determine confidence color (red=high, yellow=medium, green=low)
-        confidence = segment.get('confidence', 0.8)
-        if confidence >= 0.8:
-            border_color = "#ef4444"  # Red - high confidence
-        elif confidence >= 0.5:
-            border_color = "#fbbf24"  # Yellow - medium
-        else:
-            border_color = "#22c55e"  # Green - low confidence
-        
-        # Determine detection type icon
-        det_type = segment.get('type', '')
-        if det_type == 'nudity' or 'nudity' in str(segment.get('source', '')):
-            self.type_icon = "👁"  # Visual
-        elif det_type == 'profanity' or 'profanity' in str(segment.get('source', '')):
-            self.type_icon = "🔊"  # Audio
-        elif det_type == 'both':
-            self.type_icon = "⚠️"  # Both
-        else:
-            self.type_icon = "🔍"  # Unknown
-        
-        self.setProperty("class", "detection-card")
-        self.setStyleSheet(f"""
-            QFrame[class="detection-card"] {{
-                background: #1a1a24;
-                border: 2px solid {border_color};
-                border-radius: 8px;
-                padding: 12px;
-            }}
-            QFrame[class="detection-card"]:hover {{
-                border-color: #3b82f6;
-                background: #1f1f2a;
-            }}
-        """)
-        self.setCursor(Qt.PointingHandCursor)
-        
-        self._create_ui()
-        
-    def _create_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(12, 10, 12, 10)
-        
-        # Header with checkbox, counter and time
-        header = QHBoxLayout()
-        
-        # Selection checkbox
-        self.checkbox = QCheckBox()
-        self.checkbox.setStyleSheet("""
-            QCheckBox {
-                spacing: 4px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 4px;
-                border: 2px solid #3a3a48;
-                background: #1a1a24;
-            }
-            QCheckBox::indicator:checked {
-                background: #3b82f6;
-                border-color: #3b82f6;
-            }
-            QCheckBox::indicator:hover {
-                border-color: #3b82f6;
-            }
-        """)
-        self.checkbox.stateChanged.connect(self._on_checkbox_changed)
-        header.addWidget(self.checkbox)
-        
-        counter = QLabel(f"#{self.index + 1} of {self.total}")
-        counter.setStyleSheet("color: #71717a; font-size: 11px; font-weight: 600;")
-        header.addWidget(counter)
-        
-        header.addStretch()
-        
-        # Time range
-        start = self._format_time(self.segment.get('start', 0))
-        end = self._format_time(self.segment.get('end', 0))
-        time_label = QLabel(f"⏱ {start} → {end}")
-        time_label.setStyleSheet("color: #3b82f6; font-size: 11px; font-weight: 600;")
-        header.addWidget(time_label)
-        
-        layout.addLayout(header)
-        
-        # Reason/Label
-        reason = self.segment.get('label', self.segment.get('reason', 'Detection'))
-        reason_label = QLabel(reason)
-        reason_label.setWordWrap(True)
-        reason_label.setStyleSheet("color: #e0e0e8; font-size: 12px;")
-        layout.addWidget(reason_label)
-        
-        # Info row
-        info_row = QHBoxLayout()
-        
-        # Confidence if available
-        confidence = self.segment.get('confidence')
-        if confidence:
-            conf_label = QLabel(f"Conf: {confidence:.0%}")
-            conf_label.setStyleSheet("color: #71717a; font-size: 10px;")
-            info_row.addWidget(conf_label)
-        
-        # Duration
-        duration = self.segment.get('end', 0) - self.segment.get('start', 0)
-        dur_label = QLabel(f"Dur: {duration:.1f}s")
-        dur_label.setStyleSheet("color: #71717a; font-size: 10px;")
-        info_row.addWidget(dur_label)
-        
-        info_row.addStretch()
-        layout.addLayout(info_row)
-        
-        # Action buttons
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
-        
-        self.keep_btn = QPushButton("✓ Keep")
-        self.keep_btn.setStyleSheet("""
-            QPushButton {
-                background: #22c55e;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-weight: 600;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background: #16a34a;
-            }
-        """)
-        self.keep_btn.clicked.connect(lambda: self.keep_clicked.emit(self.segment))
-        actions.addWidget(self.keep_btn)
-        
-        self.delete_btn = QPushButton("✗ Delete")
-        self.delete_btn.setStyleSheet("""
-            QPushButton {
-                background: #ef4444;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-weight: 600;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background: #dc2626;
-            }
-        """)
-        self.delete_btn.clicked.connect(lambda: self.delete_clicked.emit(self.segment))
-        actions.addWidget(self.delete_btn)
-        
-        layout.addLayout(actions)
-        
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.card_clicked.emit(self.segment)
-        super().mousePressEvent(event)
-        
-    def _format_time(self, seconds: float) -> str:
-        m, s = divmod(int(seconds), 60)
-        h, m = divmod(m, 60)
-        if h > 0:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m}:{s:02d}"
-    
-    def set_highlighted(self, highlighted: bool):
-        """Highlight this card as the current one."""
-        if highlighted:
-            self.setStyleSheet("""
-                QFrame[class="detection-card"] {
-                    background: #1f2937;
-                    border: 2px solid #3b82f6;
-                    border-radius: 8px;
-                    padding: 12px;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                QFrame[class="detection-card"] {
-                    background: #1a1a24;
-                    border: 1px solid #2a2a38;
-                    border-radius: 8px;
-                    padding: 12px;
-                }
-                QFrame[class="detection-card"]:hover {
-                    border-color: #3b82f6;
-                    background: #1f1f2a;
-                }
-            """)
-    
-    def _on_checkbox_changed(self, state):
-        """Handle checkbox state change."""
-        self._is_selected = state == Qt.Checked
-        self.selection_changed.emit(self.segment, self._is_selected)
-        
-    def set_selected(self, selected: bool):
-        """Programmatically set the selection state."""
-        self._is_selected = selected
-        self.checkbox.blockSignals(True)
-        self.checkbox.setChecked(selected)
-        self.checkbox.blockSignals(False)
-        
-    def is_selected(self) -> bool:
-        """Return current selection state."""
-        return self._is_selected
+# Import card components
+from ui.components.detection_card import MiniDetectionCard, SceneCard, DetectionCard
+from ui.components.hover_preview import HoverPreview
 
 
 class CollapsibleSection(QFrame):
@@ -609,6 +117,7 @@ class DetectionBrowserPanel(QFrame):
         self.data = {}  # {track_key: [segments]} - original data (to review)
         self.kept = {}  # {track_key: [segments]}
         self.deleted = {}  # {track_key: [segments]}
+        self.video_path = None # For preview
         
         self.current_track = None
         self.current_index = 0
@@ -618,6 +127,8 @@ class DetectionBrowserPanel(QFrame):
         self.scene_mode = False  # Scene grouping mode
         self.scene_gap = 5.0  # Default scene gap in seconds
         self.scenes = []  # Grouped scenes for current track
+        
+        self.hover_preview = HoverPreview(self)
         
         # Enable keyboard focus
         self.setFocusPolicy(Qt.StrongFocus)
@@ -663,6 +174,29 @@ class DetectionBrowserPanel(QFrame):
         """)
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tab_bar)
+        
+        # Quick Actions Toolbar (Batch)
+        actions_bar = QHBoxLayout()
+        actions_bar.setSpacing(4)
+        
+        actions_label = QLabel("Batch:")
+        actions_label.setStyleSheet("color: #71717a; font-size: 10px; font-weight: bold;")
+        actions_bar.addWidget(actions_label)
+        
+        btn_skip_low = QPushButton("Skip Low Conf")
+        btn_skip_low.setToolTip("Skip all < 50% confidence")
+        btn_skip_low.clicked.connect(lambda: self.skip_low_confidence(0.5))
+        btn_skip_low.setStyleSheet("background: #2a2a35; color: #a0a0b0; border: none; font-size: 10px; padding: 4px 8px; border-radius: 4px;")
+        actions_bar.addWidget(btn_skip_low)
+        
+        btn_confirm_high = QPushButton("Keep High Conf")
+        btn_confirm_high.setToolTip("Keep all > 80% confidence")
+        btn_confirm_high.clicked.connect(lambda: self.confirm_high_confidence(0.8))
+        btn_confirm_high.setStyleSheet("background: #2a2a35; color: #a0a0b0; border: none; font-size: 10px; padding: 4px 8px; border-radius: 4px;")
+        actions_bar.addWidget(btn_confirm_high)
+        
+        actions_bar.addStretch()
+        layout.addLayout(actions_bar)
         
         # Progress summary
         self.progress_summary = QLabel()
@@ -801,8 +335,8 @@ class DetectionBrowserPanel(QFrame):
                 background: #16a34a;
             }
             QPushButton:disabled {
-                background: #1a2e1a;
-                color: #4a5a4a;
+                background: #2a2a35;
+                color: #52525b;
             }
         """)
         self.keep_selected_btn.clicked.connect(self._keep_selected)
@@ -824,8 +358,8 @@ class DetectionBrowserPanel(QFrame):
                 background: #dc2626;
             }
             QPushButton:disabled {
-                background: #2e1a1a;
-                color: #5a4a4a;
+                background: #2a2a35;
+                color: #52525b;
             }
         """)
         self.delete_selected_btn.clicked.connect(self._delete_selected)
@@ -876,129 +410,110 @@ class DetectionBrowserPanel(QFrame):
         quick_all.addStretch()
         layout.addLayout(quick_all)
         
-    def set_data(self, data: dict):
-        """Load detection data. Expected format: {track_key: [segments]}"""
-        # Deep copy segments to avoid modifying original
-        self.data = {k: list(v) for k, v in data.items() if v}
-        self.kept = {k: [] for k in self.data.keys()}
-        self.deleted = {k: [] for k in self.data.keys()}
-        self.current_index = 0
+    def set_data(self, data: dict, video_path: str = None):
+        """Set detection data and refresh sections."""
+        self.data = data
+        self.video_path = video_path
+        self.kept = {}
+        self.deleted = {}
+        self.selected_segments.clear()
         
-        # Clear tabs
-        while self.tab_bar.count() > 0:
+        # Refresh tabs
+        while self.tab_bar.count():
             self.tab_bar.removeTab(0)
-        
-        # Add tabs for each detection type
-        track_display = {
-            'nudity': ('👁 Nudity', '#f43f5e'),
-            'profanity': ('🤬 Profanity', '#fbbf24'),
-            'sexual_content': ('💋 Sexual', '#d946ef'),
-            'violence': ('⚔️ Violence', '#ef4444'),
-        }
-        
-        for key, segments in self.data.items():
-            display_name, color = track_display.get(key, (key.title(), '#888'))
-            total = len(segments)
-            self.tab_bar.addTab(f"{display_name} ({total})")
-            self.tab_bar.setTabData(self.tab_bar.count() - 1, key)
-        
-        # Select first tab
-        if self.tab_bar.count() > 0:
-            self.tab_bar.setCurrentIndex(0)
+            
+        tracks = list(data.keys())
+        if tracks:
+            for track in tracks:
+                name = track.replace('_', ' ').title()
+                self.tab_bar.addTab(name)
+            
+            self.current_track = tracks[0]
+            self.scene_mode = False # Reset scene mode
+            self.scene_toggle.setChecked(False)
             self._on_tab_changed(0)
         else:
             self._clear_all()
-            self.progress_summary.setText("No detections found")
             
     def _on_tab_changed(self, index: int):
-        """Handle tab selection."""
         if index < 0:
             return
             
-        self.current_track = self.tab_bar.tabData(index)
-        self.current_index = 0
+        track_key = list(self.data.keys())[index]
+        self.current_track = track_key
         
-        # Show scene toggle only for nudity track
-        is_nudity = self.current_track == 'nudity'
-        self.scene_toggle.setVisible(is_nudity and HAS_SCENE_GROUPING)
-        
-        # Reset scene mode if switching away from nudity
-        if not is_nudity:
-            self.scene_mode = False
-            self.scene_toggle.setChecked(False)
+        # Show scene toggle only for nudity
+        self.scene_toggle.setVisible(track_key == 'nudity' and HAS_SCENE_GROUPING)
+        self.scene_mode = self.scene_toggle.isChecked() and track_key == 'nudity'
         
         self._refresh_all_sections()
         
     def _refresh_all_sections(self):
-        """Rebuild all sections for current track."""
-        self._clear_all()
-        self.selected_segments.clear()  # Reset selection
-        self._update_selection_ui()
-        
+        """Rebuild all sections based on current state."""
         if not self.current_track:
             return
-        
+            
+        # Get lists
         to_review = self.data.get(self.current_track, [])
         kept = self.kept.get(self.current_track, [])
         deleted = self.deleted.get(self.current_track, [])
         
-        total = len(to_review) + len(kept) + len(deleted)
-        reviewed = len(kept) + len(deleted)
-        
-        if total > 0:
-            pct = (reviewed / total) * 100
-            self.progress_summary.setText(f"Progress: {reviewed}/{total} reviewed ({pct:.0f}%)")
-        else:
-            self.progress_summary.setText("No detections")
-        
-        # Build To Review section
-        if to_review:
-            # Check if we should group into scenes (only for nudity)
-            if self.scene_mode and self.current_track == 'nudity' and HAS_SCENE_GROUPING:
-                self._build_scene_cards(to_review)
-            else:
-                self._build_detection_cards(to_review)
-        else:
-            done_label = QLabel("✅ All reviewed!")
-            done_label.setStyleSheet("color: #22c55e; font-size: 12px; padding: 12px; text-align: center;")
-            done_label.setAlignment(Qt.AlignCenter)
-            self.review_layout.addWidget(done_label)
-        
-        # Build Kept section
+        # Clear UI
+        # Remove all items from review layout
+        while self.review_layout.count():
+            item = self.review_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+                
+        self.cards = []
         self.kept_section.clear()
+        self.deleted_section.clear()
+        self.selected_segments.clear()
+        self._update_selection_ui()
+        
+        # Build To Review
+        if self.scene_mode and HAS_SCENE_GROUPING:
+            self._build_scene_cards(to_review)
+        else:
+            self._build_detection_cards(to_review)
+        
+        # Build Kept
         self.kept_section.set_count(len(kept))
         for segment in kept:
-            mini_card = MiniDetectionCard(segment, 'kept')
-            mini_card.restore_clicked.connect(lambda seg: self._restore_segment(seg, 'kept'))
-            mini_card.card_clicked.connect(self._on_card_clicked)
-            self.kept_section.add_widget(mini_card)
-        
-        # Build Deleted section
-        self.deleted_section.clear()
+            card = MiniDetectionCard(segment, 'kept')
+            card.restore_clicked.connect(lambda s: self._restore_segment(s, 'kept'))
+            card.card_clicked.connect(self._on_card_clicked)
+            self.kept_section.add_widget(card)
+            
+        # Build Deleted
         self.deleted_section.set_count(len(deleted))
         for segment in deleted:
-            mini_card = MiniDetectionCard(segment, 'deleted')
-            mini_card.restore_clicked.connect(lambda seg: self._restore_segment(seg, 'deleted'))
-            mini_card.card_clicked.connect(self._on_card_clicked)
-            self.deleted_section.add_widget(mini_card)
-    
+            card = MiniDetectionCard(segment, 'deleted')
+            card.restore_clicked.connect(lambda s: self._restore_segment(s, 'deleted'))
+            card.card_clicked.connect(self._on_card_clicked)
+            self.deleted_section.add_widget(card)
+            
+        self._update_tab_counts()
+        
     def _build_detection_cards(self, to_review: list):
-        """Build individual detection cards (normal mode)."""
+        """Build individual detection cards."""
+        total = len(to_review)
         for i, segment in enumerate(to_review):
-            card = DetectionCard(segment, i, len(to_review))
+            card = DetectionCard(segment, i, total)
             card.keep_clicked.connect(self._on_keep)
             card.delete_clicked.connect(self._on_delete)
             card.card_clicked.connect(self._on_card_clicked)
             card.selection_changed.connect(self._on_selection_changed)
+            # Hover events
+            card.hover_started.connect(self._on_card_hover_start)
+            card.hover_ended.connect(self._on_card_hover_end)
+            
             self.review_layout.addWidget(card)
             self.cards.append(card)
             
-        # Highlight first card
-        if self.cards:
-            self.cards[0].set_highlighted(True)
-    
     def _build_scene_cards(self, to_review: list):
-        """Build scene cards (grouped mode) for nudity."""
+        """Build grouped scene cards."""
+        # Group detections into scenes
         # Convert segments to TimeIntervals for grouping
         intervals = []
         for seg in to_review:
@@ -1010,150 +525,148 @@ class DetectionBrowserPanel(QFrame):
             # Store reference to original segment
             ti.metadata['segment'] = seg
             intervals.append(ti)
-        
-        # Group into scenes
+
         self.scenes = group_into_scenes(intervals, scene_gap=self.scene_gap)
+        total = len(self.scenes)
         
-        # Create scene cards
         for i, scene in enumerate(self.scenes):
-            card = SceneCard(scene, i, len(self.scenes))
+            card = SceneCard(scene, i, total)
             card.keep_clicked.connect(self._on_scene_keep)
             card.delete_clicked.connect(self._on_scene_delete)
-            card.card_clicked.connect(self._on_card_clicked)
+            card.card_clicked.connect(lambda s: self._on_card_clicked(s.detections[0].metadata['segment'])) # Seek to start of first detection in scene
             card.selection_changed.connect(self._on_scene_selection_changed)
+            
             self.review_layout.addWidget(card)
             self.cards.append(card)
-    
+            
+    def _on_card_hover_start(self, segment):
+        """Show hover preview."""
+        if self.video_path:
+            # Map global position
+            cursor_pos = self.cursor().pos()
+            self.hover_preview.start_preview(self.video_path, segment.get('start', 0), cursor_pos)
+
+    def _on_card_hover_end(self):
+        """Hide hover preview."""
+        self.hover_preview.stop_preview()
+
     def _on_scene_toggle(self, state):
-        """Handle scene grouping toggle."""
-        self.scene_mode = state == Qt.Checked
+        self.scene_mode = (state == Qt.Checked)
         self._refresh_all_sections()
-    
+        
     def _on_scene_keep(self, scene):
-        """Keep all detections in a scene."""
-        to_review = self.data.get(self.current_track, [])
-        kept = self.kept.get(self.current_track, [])
-        
-        # Keep all segments within this scene
-        for detection in scene.detections:
-            seg = detection.metadata.get('segment')
-            if seg and seg in to_review:
-                to_review.remove(seg)
-                seg['ignored'] = True
-                kept.append(seg)
-                self.segment_kept.emit(self.current_track, seg)
-        
-        self._update_tab_counts()
+        # Keep all detections in scene
+        for det_interval in scene.detections:
+            seg = det_interval.metadata.get('segment')
+            if seg:
+                self._on_keep(seg, refresh=False)
         self._refresh_all_sections()
         
-        # Seek to next scene if available
-        if to_review:
-            self.seek_to_segment.emit(to_review[0])
-    
     def _on_scene_delete(self, scene):
-        """Delete all detections in a scene."""
-        to_review = self.data.get(self.current_track, [])
-        deleted = self.deleted.get(self.current_track, [])
-        
-        # Delete all segments within this scene
-        for detection in scene.detections:
-            seg = detection.metadata.get('segment')
-            if seg and seg in to_review:
-                to_review.remove(seg)
-                deleted.append(seg)
-                self.segment_deleted.emit(self.current_track, seg)
-        
-        self._update_tab_counts()
+        # Delete all detections in scene
+        for det_interval in scene.detections:
+            seg = det_interval.metadata.get('segment')
+            if seg:
+                self._on_delete(seg, refresh=False)
         self._refresh_all_sections()
         
-        # Seek to next scene if available
-        if to_review:
-            self.seek_to_segment.emit(to_review[0])
-    
     def _on_scene_selection_changed(self, scene, is_selected: bool):
-        """Handle scene selection change."""
-        scene_id = id(scene)
+        # Add/remove all detection IDs in scene
+        ids = [id(d.metadata['segment']) for d in scene.detections if 'segment' in d.metadata]
         if is_selected:
-            self.selected_segments.add(scene_id)
+            self.selected_segments.update(ids)
         else:
-            self.selected_segments.discard(scene_id)
+            self.selected_segments.difference_update(ids)
         self._update_selection_ui()
-    
+
     def _clear_all(self):
-        """Clear all card widgets."""
-        for card in self.cards:
-            card.deleteLater()
-        self.cards = []
-        
-        # Clear review layout
         while self.review_layout.count():
             item = self.review_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        
         self.kept_section.clear()
         self.deleted_section.clear()
         
     def _on_card_clicked(self, segment):
-        """Handle clicking on any card to seek."""
         self.seek_to_segment.emit(segment)
+        # Highlight card
+        # Find card if exists
+        idx = -1
+        # Simple lookup
+        for i, card in enumerate(self.cards):
+            if isinstance(card, DetectionCard) and card.segment == segment:
+                idx = i
+                break
+            elif isinstance(card, SceneCard):
+                # For scene cards, check if the segment is part of this scene
+                for det_interval in card.scene.detections:
+                    if det_interval.metadata.get('segment') == segment:
+                        idx = i
+                        break
+                if idx != -1:
+                    break
+        if idx != -1:
+            self.current_card_index = idx
+            self._highlight_current_card()
         
-    def _on_keep(self, segment):
-        """Move segment from to-review to kept."""
+    def _on_keep(self, segment, refresh=True):
+        if not self.current_track:
+            return
+            
         to_review = self.data.get(self.current_track, [])
-        kept = self.kept.get(self.current_track, [])
+        kept = self.kept.setdefault(self.current_track, [])
         
         if segment in to_review:
             to_review.remove(segment)
-            segment['ignored'] = True  # Mark as ignored for censoring
             kept.append(segment)
+            # Mark as ignored so it's not censored
+            if 'original_label' not in segment:
+                segment['original_label'] = segment.get('label', '')
+            segment['ignored'] = True
+            
             self.segment_kept.emit(self.current_track, segment)
             
-            self._update_tab_counts()
-            self._refresh_all_sections()
-            
-            # Seek to next if available
-            if to_review:
-                self.seek_to_segment.emit(to_review[0])
+            if refresh:
+                self._update_tab_counts()
+                self._refresh_all_sections()
                 
-    def _on_delete(self, segment):
-        """Move segment from to-review to deleted."""
+    def _on_delete(self, segment, refresh=True):
+        if not self.current_track:
+            return
+            
         to_review = self.data.get(self.current_track, [])
-        deleted = self.deleted.get(self.current_track, [])
+        deleted = self.deleted.setdefault(self.current_track, [])
         
         if segment in to_review:
             to_review.remove(segment)
             deleted.append(segment)
             self.segment_deleted.emit(self.current_track, segment)
             
-            self._update_tab_counts()
-            self._refresh_all_sections()
-            
-            # Seek to next if available
-            if to_review:
-                self.seek_to_segment.emit(to_review[0])
+            if refresh:
+                self._update_tab_counts()
+                self._refresh_all_sections()
                 
     def _restore_segment(self, segment, from_section: str):
-        """Restore a segment back to the to-review list."""
-        to_review = self.data.get(self.current_track, [])
+        if not self.current_track:
+            return
+            
+        target_list = self.kept.get(self.current_track, []) if from_section == 'kept' else self.deleted.get(self.current_track, [])
+        to_review = self.data.setdefault(self.current_track, [])
         
-        if from_section == 'kept':
-            kept = self.kept.get(self.current_track, [])
-            if segment in kept:
-                kept.remove(segment)
-                segment['ignored'] = False  # Un-ignore
-                to_review.append(segment)
-        elif from_section == 'deleted':
-            deleted = self.deleted.get(self.current_track, [])
-            if segment in deleted:
-                deleted.remove(segment)
-                to_review.append(segment)
-        
-        self._update_tab_counts()
-        self._refresh_all_sections()
-        
+        if segment in target_list:
+            target_list.remove(segment)
+            to_review.append(segment)
+            
+            # Reset ignored status if returning from kept
+            if from_section == 'kept':
+                segment['ignored'] = False
+            
+            # Re-sort to review list by start time
+            to_review.sort(key=lambda x: x.get('start', 0))
+            
+            self._refresh_all_sections()
+            
     def _update_tab_counts(self):
-        """Update tab labels with remaining to-review counts."""
         track_display = {
             'nudity': '👁 Nudity',
             'profanity': '🤬 Profanity',
@@ -1162,128 +675,97 @@ class DetectionBrowserPanel(QFrame):
         }
         
         for i in range(self.tab_bar.count()):
-            key = self.tab_bar.tabData(i)
-            to_review = len(self.data.get(key, []))
+            key = list(self.data.keys())[i] # Get the actual track key
+            to_review_count = len(self.data.get(key, []))
             display = track_display.get(key, key.title())
-            self.tab_bar.setTabText(i, f"{display} ({to_review})")
-            
+            self.tab_bar.setTabText(i, f"{display} ({to_review_count})")
+
+        # Update progress summary
+        to_review_total = len(self.data.get(self.current_track, []))
+        kept_total = len(self.kept.get(self.current_track, []))
+        deleted_total = len(self.deleted.get(self.current_track, []))
+        
+        total_segments = to_review_total + kept_total + deleted_total
+        reviewed_segments = kept_total + deleted_total
+        
+        if total_segments > 0:
+            pct = (reviewed_segments / total_segments) * 100
+            self.progress_summary.setText(f"Progress: {reviewed_segments}/{total_segments} reviewed ({pct:.0f}%)")
+        else:
+            self.progress_summary.setText("No detections")
+
     def _keep_all(self):
-        """Keep all remaining to-review items."""
-        to_review = self.data.get(self.current_track, [])
-        kept = self.kept.get(self.current_track, [])
-        
-        for segment in list(to_review):
-            segment['ignored'] = True
-            kept.append(segment)
-            self.segment_kept.emit(self.current_track, segment)
-        to_review.clear()
-        
-        self._update_tab_counts()
+        # Keep all remaining
+        if not self.current_track: return
+        to_review = list(self.data.get(self.current_track, []))
+        for s in to_review:
+            self._on_keep(s, refresh=False)
         self._refresh_all_sections()
         
     def _delete_all(self):
-        """Delete all remaining to-review items."""
-        to_review = self.data.get(self.current_track, [])
-        deleted = self.deleted.get(self.current_track, [])
-        
-        for segment in list(to_review):
-            deleted.append(segment)
-            self.segment_deleted.emit(self.current_track, segment)
-        to_review.clear()
-        
-        self._update_tab_counts()
+        if not self.current_track: return
+        to_review = list(self.data.get(self.current_track, []))
+        for s in to_review:
+            self._on_delete(s, refresh=False)
         self._refresh_all_sections()
-    
-    # ===== SELECTION HANDLING =====
-    
+        
     def _on_selection_changed(self, segment, is_selected: bool):
-        """Handle selection change from a card."""
         seg_id = id(segment)
         if is_selected:
             self.selected_segments.add(seg_id)
-        else:
-            self.selected_segments.discard(seg_id)
+        elif seg_id in self.selected_segments:
+            self.selected_segments.remove(seg_id)
         self._update_selection_ui()
         
     def _update_selection_ui(self):
-        """Update selection-related UI elements."""
         count = len(self.selected_segments)
-        total = len(self.cards)
-        
-        # Update selection label
         self.selection_label.setText(f"{count} selected")
+        self.keep_selected_btn.setEnabled(count > 0)
+        self.delete_selected_btn.setEnabled(count > 0)
+        self.keep_selected_btn.setText(f"✓ Keep ({count})")
+        self.delete_selected_btn.setText(f"✗ Delete ({count})")
         
         # Update Select All button text
-        if count == total and total > 0:
+        total_review_items = len(self.cards)
+        if count == total_review_items and total_review_items > 0:
             self.select_all_btn.setText("☑ Deselect All")
         else:
             self.select_all_btn.setText("☐ Select All")
         
-        # Enable/disable batch action buttons
-        has_selection = count > 0
-        self.keep_selected_btn.setEnabled(has_selection)
-        self.delete_selected_btn.setEnabled(has_selection)
-        
-        # Update button text with count
-        if has_selection:
-            self.keep_selected_btn.setText(f"✓ Keep Selected ({count})")
-            self.delete_selected_btn.setText(f"✗ Delete Selected ({count})")
-        else:
-            self.keep_selected_btn.setText("✓ Keep Selected")
-            self.delete_selected_btn.setText("✗ Delete Selected")
-    
     def _toggle_select_all(self):
-        """Toggle select all / deselect all."""
-        if len(self.selected_segments) == len(self.cards) and len(self.cards) > 0:
-            # Deselect all
-            self.selected_segments.clear()
-            for card in self.cards:
-                card.set_selected(False)
-        else:
-            # Select all
-            self.selected_segments.clear()
-            for card in self.cards:
-                card.set_selected(True)
-                self.selected_segments.add(id(card.segment))
-        self._update_selection_ui()
-    
-    def _keep_selected(self):
-        """Keep all selected items."""
-        to_review = self.data.get(self.current_track, [])
-        kept = self.kept.get(self.current_track, [])
+        if not self.cards: return
         
-        segments_to_keep = []
+        # Check if all currently selected
+        all_selected = len(self.selected_segments) == sum(
+            len(card.scene.detections) if isinstance(card, SceneCard) else 1
+            for card in self.cards
+        ) and len(self.cards) > 0
+        
+        target_state = not all_selected
         for card in self.cards:
-            if id(card.segment) in self.selected_segments:
-                segments_to_keep.append(card.segment)
+            if hasattr(card, 'set_selected'):
+                card.set_selected(target_state)
+                
+    def _keep_selected(self):
+        if not self.current_track: return
+        
+        to_review = list(self.data.get(self.current_track, []))
+        segments_to_keep = [s for s in to_review if id(s) in self.selected_segments]
         
         for segment in segments_to_keep:
-            if segment in to_review:
-                to_review.remove(segment)
-                segment['ignored'] = True
-                kept.append(segment)
-                self.segment_kept.emit(self.current_track, segment)
-        
-        self._update_tab_counts()
+            self._on_keep(segment, refresh=False)
+            
         self._refresh_all_sections()
-    
-    def _delete_selected(self):
-        """Delete all selected items."""
-        to_review = self.data.get(self.current_track, [])
-        deleted = self.deleted.get(self.current_track, [])
         
-        segments_to_delete = []
-        for card in self.cards:
-            if id(card.segment) in self.selected_segments:
-                segments_to_delete.append(card.segment)
+    def _delete_selected(self):
+        if not self.current_track: return
+        
+        to_review = list(self.data.get(self.current_track, []))
+        segments_to_delete = [s for s in to_review if id(s) in self.selected_segments]
         
         for segment in segments_to_delete:
-            if segment in to_review:
-                to_review.remove(segment)
-                deleted.append(segment)
-                self.segment_deleted.emit(self.current_track, segment)
-        
-        self._update_tab_counts()
+            self._on_delete(segment, refresh=False)
+            
         self._refresh_all_sections()
         
     def get_final_data(self) -> dict:
@@ -1321,9 +803,16 @@ class DetectionBrowserPanel(QFrame):
         if self.cards and 0 <= self.current_card_index < len(self.cards):
             current_card = self.cards[self.current_card_index]
         
+        # Determine the actual segment for the current card
+        current_segment = None
+        if isinstance(current_card, DetectionCard):
+            current_segment = current_card.segment
+        elif isinstance(current_card, SceneCard) and current_card.scene.detections:
+            current_segment = current_card.scene.detections[0].metadata.get('segment') # Use first segment in scene
+        
         if key == Qt.Key_Space:
-            if current_card and hasattr(current_card, 'segment'):
-                self.seek_to_segment.emit(current_card.segment)
+            if current_segment:
+                self.seek_to_segment.emit(current_segment)
             event.accept()
         elif key == Qt.Key_Left:
             self._navigate_prev()
@@ -1332,21 +821,27 @@ class DetectionBrowserPanel(QFrame):
             self._navigate_next()
             event.accept()
         elif key == Qt.Key_K:
-            if current_card and hasattr(current_card, 'segment'):
-                self._on_keep(current_card.segment)
+            if current_segment:
+                if isinstance(current_card, SceneCard):
+                    self._on_scene_keep(current_card.scene)
+                else:
+                    self._on_keep(current_segment)
                 self._navigate_next()
             event.accept()
         elif key == Qt.Key_S:
-            if current_card and hasattr(current_card, 'segment'):
-                self._on_delete(current_card.segment)
+            if current_segment:
+                if isinstance(current_card, SceneCard):
+                    self._on_scene_delete(current_card.scene)
+                else:
+                    self._on_delete(current_segment)
             event.accept()
         elif key == Qt.Key_E:
-            if current_card and hasattr(current_card, 'segment'):
-                self._expand_region(current_card.segment)
+            if current_segment:
+                self._expand_region(current_segment)
             event.accept()
         elif key == Qt.Key_R:
-            if current_card and hasattr(current_card, 'segment'):
-                self._reduce_region(current_card.segment)
+            if current_segment:
+                self._reduce_region(current_segment)
             event.accept()
         else:
             super().keyPressEvent(event)
@@ -1371,8 +866,15 @@ class DetectionBrowserPanel(QFrame):
         
         if self.cards and 0 <= self.current_card_index < len(self.cards):
             card = self.cards[self.current_card_index]
-            if hasattr(card, 'segment'):
-                self.seek_to_segment.emit(card.segment)
+            
+            current_segment = None
+            if isinstance(card, DetectionCard):
+                current_segment = card.segment
+            elif isinstance(card, SceneCard) and card.scene.detections:
+                current_segment = card.scene.detections[0].metadata.get('segment')
+
+            if current_segment:
+                self.seek_to_segment.emit(current_segment)
     
     def _expand_region(self, segment: dict):
         """Expand detection region by 0.5s on each side."""
@@ -1400,7 +902,8 @@ class DetectionBrowserPanel(QFrame):
         to_review = list(self.data.get(self.current_track, []))
         for s in to_review:
             if s.get('confidence', 1.0) < threshold:
-                self._on_delete(s)
+                self._on_delete(s, refresh=False)
+        self._refresh_all_sections()
     
     def confirm_high_confidence(self, threshold: float = 0.8):
         """Confirm all detections with confidence above threshold."""
@@ -1409,17 +912,20 @@ class DetectionBrowserPanel(QFrame):
         to_review = list(self.data.get(self.current_track, []))
         for s in to_review:
             if s.get('confidence', 1.0) >= threshold:
-                self._on_keep(s)
+                self._on_keep(s, refresh=False)
+        self._refresh_all_sections()
     
     def skip_audio_only(self):
         """Skip all audio-only (profanity) detections."""
         if self.current_track == 'profanity':
             for s in list(self.data.get(self.current_track, [])):
-                self._on_delete(s)
+                self._on_delete(s, refresh=False)
+        self._refresh_all_sections()
     
     def skip_visual_only(self):
         """Skip all visual-only (nudity) detections."""
         if self.current_track == 'nudity':
             for s in list(self.data.get(self.current_track, [])):
-                self._on_delete(s)
-
+                self._on_delete(s, refresh=False)
+        self._refresh_all_sections()
+```

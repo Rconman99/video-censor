@@ -21,6 +21,25 @@ class SystemConfig:
 
 
 @dataclass
+class SyncConfig:
+    """Configuration for cloud synchronization."""
+    enabled: bool = False
+    auto_sync: bool = True
+    supabase_url: str = ""
+    supabase_key: str = ""
+    user_id: str = ""  # UUID for the user
+
+
+@dataclass
+class PerformanceConfig:
+    """Configuration for performance and resource management."""
+    parallel_detection: bool = True
+    gpu_memory_limit: Optional[str] = None  # e.g., "4GB", handled by torch/tensorflow if possible, or just env set
+    fallback_to_sequential: bool = True
+    stagger_delay: float = 2.0  # Seconds to wait before starting video detection
+
+
+@dataclass
 class LLMConfig:
     """Configuration for LLM-based context analysis."""
     enabled: bool = False  # Opt-in feature
@@ -187,6 +206,8 @@ class Config:
     content_lookup: ContentLookupConfig = field(default_factory=ContentLookupConfig)
     community: CommunityConfig = field(default_factory=CommunityConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
+    performance: PerformanceConfig = field(default_factory=PerformanceConfig)
+    sync: SyncConfig = field(default_factory=SyncConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     
     @classmethod
@@ -256,6 +277,18 @@ class Config:
                 for key, value in data['system'].items():
                     if hasattr(config.system, key):
                         setattr(config.system, key, value)
+
+            # Update performance config
+            if 'performance' in data:
+                for key, value in data['performance'].items():
+                    if hasattr(config.performance, key):
+                        setattr(config.performance, key, value)
+
+            # Update sync config
+            if 'sync' in data:
+                for key, value in data['sync'].items():
+                    if hasattr(config.sync, key):
+                        setattr(config.sync, key, value)
             
             # Update community config
             if 'community' in data:

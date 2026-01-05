@@ -186,3 +186,46 @@ def get_preset_summary(preset_name: str) -> str:
         parts.append(f"  Visual: {sensitivity} sensitivity")
     
     return "\n".join(parts)
+
+
+def sync_presets(config: 'Config') -> bool:
+    """
+    Synchronize custom presets with the cloud.
+    
+    Args:
+        config: The application configuration
+        
+    Returns:
+        True if sync was successful or not needed, False on failure
+    """
+    if not config.sync.enabled or not config.sync.user_id:
+        return True
+        
+    from .sync import SyncManager
+    manager = SyncManager(config.sync.supabase_url, config.sync.supabase_key, config.sync.user_id)
+    
+    if not manager.is_configured:
+        return True
+        
+    # 1. Pull remote presets
+    remote_presets = manager.pull_presets()
+    if remote_presets is None:
+        return False
+        
+    # 2. Add/Update local list (in-memory only for now, relies on runtime storage)
+    # Note: A real persisting preset system would load/save to a file.
+    # Current limitation: presets are hardcoded in PRESETS dict.
+    # To support custom presets, we need a 'custom_presets' dict we load.
+    
+    # For now, let's just log what we WOULD do if custom presets were writable
+    if remote_presets:
+        logger.info(f"Sync: Received {len(remote_presets)} presets from cloud (read-only in this version)")
+        for p in remote_presets:
+            logger.info(f" - {p['name']}")
+            
+    # 3. Push local "custom" presets?
+    # Since we only have built-ins, we can't push anything yet.
+    # Implementation Plan says "Load custom from presets.py".
+    # We should add a CUSTOM_PRESETS dict or similar.
+    
+    return True

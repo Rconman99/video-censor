@@ -28,6 +28,17 @@ output:
   video_codec: libx264
   video_crf: 23
   video_format: mp4
+performance:
+  parallel_detection: true
+  gpu_memory_limit: null  # e.g. "4GB"
+  fallback_to_sequential: true
+  stagger_delay: 2.0
+sync:
+  enabled: false
+  auto_sync: true
+  supabase_url: ""
+  supabase_key: ""
+  user_id: ""
 profanity:
   beep_frequency_hz: 1000
   beep_volume: 0.5

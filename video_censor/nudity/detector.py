@@ -223,7 +223,9 @@ def detect_nudity(
     min_cut_duration: float = 0.3,
     min_box_area_percent: float = 3.0,
     max_aspect_ratio: float = 4.0,
-    show_progress: bool = True
+    show_progress: bool = True,
+    progress_callback: Optional[callable] = None,
+    progress_prefix: str = ""
 ) -> List[TimeInterval]:
     """
     Detect nudity across a list of frames.
@@ -275,6 +277,25 @@ def detect_nudity(
                 f"Nudity detected at {frame.timestamp:.2f}s: "
                 f"{result.labels_found} (score={result.max_score:.2f})"
             )
+        
+        # Report progress
+        if show_progress:
+            # Calculate % complete
+            current_idx = frame_iter.n
+            total_frames = len(frames)
+            if total_frames > 0:
+                percent = int((current_idx / total_frames) * 100)
+                if percent % 5 == 0:  # Don't flood output
+                   if progress_callback:
+                       progress_callback(percent)
+                   else:
+                       # Tqdm handles stderr, but we want stdout for parsing if running headless
+                       # But here we are inside a function that might be called with show_progress=True (tqdm)
+                       # If we have a prefix, we should print it to stdout for the parent process to catch
+                       if progress_prefix:
+                           print(f"{progress_prefix} PROGRESS: {percent}%")
+                           import sys
+                           sys.stdout.flush()
     
     logger.info(f"Found nudity in {len(nudity_frames)} of {len(frames)} frames")
     

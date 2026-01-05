@@ -266,7 +266,7 @@ class ReviewPanel(QFrame):
         
         self.player.load_video(video_path)
         self.timeline.set_data(duration, data)
-        self.detection_browser.set_data(data)
+        self.detection_browser.set_data(data, video_path)
         self.setVisible(True)
         
     def _on_player_position(self, ms: int):

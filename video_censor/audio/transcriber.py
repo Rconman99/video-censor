@@ -28,7 +28,9 @@ def transcribe_audio(
     audio_path: Path,
     model_size: str = "base",
     language: str = "en",
-    compute_type: str = "int8"
+    compute_type: str = "int8",
+    progress_callback: Optional[callable] = None,
+    progress_prefix: str = ""
 ) -> List[WordTimestamp]:
     """
     Transcribe audio file to text with word-level timestamps.
@@ -109,9 +111,13 @@ def transcribe_audio(
                 
                 # Update every 1% or at least every 5 seconds of content
                 if progress_int > last_progress_int:
-                    print(f"PROGRESS: {progress_int}% (Step 1)")
-                    import sys
-                    sys.stdout.flush()
+                    if progress_callback:
+                        progress_callback(progress_int)
+                    else:
+                        prefix = f"{progress_prefix} " if progress_prefix else ""
+                        print(f"{prefix}PROGRESS: {progress_int}% (Step 1)")
+                        import sys
+                        sys.stdout.flush()
                     last_progress_int = progress_int
         
         logger.info(f"Transcribed {segment_count} segments, {len(words)} words")

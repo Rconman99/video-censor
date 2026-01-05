@@ -363,3 +363,60 @@ def save_profanity_list(words: Set[str], output_path: Path) -> None:
             f.write(f"{word}\n")
     
     logger.info(f"Saved {len(words)} words to {output_path}")
+
+
+def sync_custom_wordlist(config: 'Config') -> bool:
+    """
+    Synchronize custom wordlist with the cloud.
+    
+    Args:
+        config: The application configuration
+        
+    Returns:
+        True if sync was successful or not needed, False on failure
+    """
+    if not config.sync.enabled or not config.sync.user_id:
+        return True
+        
+    from ..sync import SyncManager
+    manager = SyncManager(config.sync.supabase_url, config.sync.supabase_key, config.sync.user_id)
+    
+    if not manager.is_configured:
+        return True
+    
+    # helper for wordlist
+    def _save_local(words_to_save):
+        path = config.profanity.custom_wordlist_path
+        if not path:
+            return # nowhere to save
+        save_profanity_list(set(words_to_save), Path(path))
+
+    # 1. Load local custom words
+    # We need just the custom ones? load_profanity_list returns default + custom.
+    # To get just custom, we should read the file directly or diff.
+    # Actually, syncing everything in the custom file is what we want.
+    
+    local_words_all = load_profanity_list(config.profanity.custom_wordlist_path)
+    # Filter out defaults to get just custom
+    local_custom = local_words_all - DEFAULT_PROFANITY
+    
+    # 2. Pull remote words
+    remote_words = manager.pull_wordlist()
+    
+    if remote_words is None:
+        return False
+        
+    # 3. Merge: Union of local and remote
+    merged = set(local_custom) | set(remote_words)
+    
+    # 4. If changes, save locally and push back
+    if len(merged) > len(local_custom):
+        logger.info(f"Sync: Downloading {len(merged) - len(local_custom)} new words")
+        # Optimization: We just need to save the custom list to the file
+        _save_local(list(merged))
+        
+    if len(merged) > len(remote_words):
+        logger.info(f"Sync: Uploading {len(merged) - len(remote_words)} new words")
+        manager.push_wordlist(list(merged))
+        
+    return True

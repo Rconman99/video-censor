@@ -416,6 +416,54 @@ class PreferencePanel(QFrame):
         n_layout.addLayout(opts_row)
         self.content_layout.addWidget(notify_widget)
         
+        # Cloud Sync Section
+        sync_widget = QFrame()
+        sync_widget.setProperty("class", "filter-card")
+        s_layout = QVBoxLayout(sync_widget)
+        s_layout.setContentsMargins(12, 12, 12, 12)
+        s_layout.setSpacing(8)
+        
+        s_header = QHBoxLayout()
+        s_label = QLabel("Cloud Sync")
+        s_label.setStyleSheet("font-weight: 600; font-size: 11px; color: #a0a0b0;")
+        s_header.addWidget(s_label)
+        s_header.addStretch()
+        self.cb_sync_enabled = QCheckBox("Enable Sync")
+        self.cb_sync_enabled.setStyleSheet("color: #b0b0c0; font-size: 11px;")
+        self.cb_sync_enabled.stateChanged.connect(self._save_settings)
+        s_header.addWidget(self.cb_sync_enabled)
+        s_layout.addLayout(s_header)
+        
+        # User ID
+        uid_row = QHBoxLayout()
+        self.sync_uid_input = QLineEdit()
+        self.sync_uid_input.setPlaceholderText("User ID (UUID)")
+        self.sync_uid_input.setStyleSheet("background: #0f0f14; border: 1px solid #282838; border-radius: 4px; padding: 4px; color: #e0e0e0; font-size: 11px;")
+        self.sync_uid_input.editingFinished.connect(self._save_settings)
+        uid_row.addWidget(self.sync_uid_input)
+        
+        gen_uid_btn = QPushButton("Generate")
+        gen_uid_btn.setFixedWidth(60)
+        gen_uid_btn.setStyleSheet("background: #282838; border: none; border-radius: 4px; padding: 4px; font-size: 10px; color: #b0b0c0;")
+        gen_uid_btn.clicked.connect(self._generate_user_id)
+        uid_row.addWidget(gen_uid_btn)
+        s_layout.addLayout(uid_row)
+        
+        # Sync Now Button & Status
+        sync_action_row = QHBoxLayout()
+        self.sync_now_btn = QPushButton("Sync Now")
+        self.sync_now_btn.setStyleSheet("background: #3b82f6; border: none; border-radius: 4px; padding: 4px 8px; font-size: 11px; color: white;")
+        self.sync_now_btn.clicked.connect(self._sync_now)
+        sync_action_row.addWidget(self.sync_now_btn)
+        
+        self.sync_status_label = QLabel("Offline")
+        self.sync_status_label.setStyleSheet("color: #71717a; font-size: 10px; font-style: italic;")
+        sync_action_row.addWidget(self.sync_status_label)
+        sync_action_row.addStretch()
+        
+        s_layout.addLayout(sync_action_row)
+        self.content_layout.addWidget(sync_widget)
+        
         self.content_layout.addStretch()
         
         scroll.setWidget(content_widget)
@@ -702,7 +750,14 @@ class PreferencePanel(QFrame):
         index = self.performance_combo.findData(perf_mode)
         if index >= 0:
             self.performance_combo.setCurrentIndex(index)
-        
+
+        # Set sync settings
+        self.cb_sync_enabled.setChecked(self.config.sync.enabled)
+        self.sync_uid_input.setText(self.config.sync.user_id)
+        if self.config.sync.enabled:
+            self.sync_status_label.setText("Enabled") # Or check last sync time?
+        else:
+            self.sync_status_label.setText("Disabled")        
         
     def _save_settings(self):
         """Save notification and other settings when changed."""
@@ -716,9 +771,19 @@ class PreferencePanel(QFrame):
         # Save performance mode
         self.config.system.performance_mode = self.performance_combo.currentData()
         
+        # Save sync settings
+        self.config.sync.enabled = self.cb_sync_enabled.isChecked()
+        self.config.sync.user_id = self.sync_uid_input.text().strip()
+        
         try:
             config_path = Path(__file__).parent.parent / "config.yaml"
             self.config.save(config_path)
+            
+            # Update UI status
+            if self.config.sync.enabled:
+                self.sync_status_label.setText("Enabled (Auto-sync on start/exit)")
+            else:
+                self.sync_status_label.setText("Disabled")
         except Exception as e:
             print(f"Failed to save settings: {e}")
     
@@ -739,6 +804,10 @@ class PreferencePanel(QFrame):
         
         # Save performance mode
         self.config.system.performance_mode = self.performance_combo.currentData()
+
+        # Save sync settings
+        self.config.sync.enabled = self.cb_sync_enabled.isChecked()
+        self.config.sync.user_id = self.sync_uid_input.text().strip()
         
         try:
             config_path = Path(__file__).parent.parent / "config.yaml"
@@ -805,6 +874,65 @@ class PreferencePanel(QFrame):
             f"• {sexual} sexual content segments\n\n"
             "These will be applied when processing starts."
         )
+
+    def _generate_user_id(self):
+        """Generate a random UUID for sync."""
+        import uuid
+        uid = str(uuid.uuid4())
+        self.sync_uid_input.setText(uid)
+        self._save_settings()
+
+    def _sync_now(self):
+        """Perform manual sync."""
+        if not self.config.sync.enabled:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Sync Disabled", "Please enable sync first.")
+            return
+
+        if not self.config.sync.user_id:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Missing User ID", "Please generate or enter a User ID.")
+            return
+
+        self.sync_now_btn.setEnabled(False)
+        self.sync_status_label.setText("Syncing...")
+        
+        # Run in thread
+        threading.Thread(target=self._run_sync_thread, daemon=True).start()
+
+    def _run_sync_thread(self):
+        """Worker thread for sync."""
+        try:
+            # We need to update config object first since it's passed around
+            # Actually self.config is already updated by _save_settings signals
+            
+            from video_censor.profanity.wordlist import sync_custom_wordlist
+            from video_censor.presets import sync_presets
+            
+            # 1. Sync Wordlist
+            w_success = sync_custom_wordlist(self.config)
+            
+            # 2. Sync Presets
+            p_success = sync_presets(self.config)
+            
+            # Update UI on main thread
+            # Since we are in a QFrame not QMainWindow, we should be careful.
+            # But simple text updates might work or use signals.
+            # Safest is to use QTimer.singleShot(0, lambda: ...)
+            
+            status_msg = "Synced just now" if (w_success and p_success) else "Sync Failed"
+            
+            QTimer.singleShot(0, lambda: self._on_sync_complete(status_msg))
+            
+        except Exception as e:
+            print(f"Sync error: {e}")
+            QTimer.singleShot(0, lambda: self._on_sync_complete(f"Error: {str(e)[:20]}"))
+
+    def _on_sync_complete(self, message):
+        """Handle sync completion on main thread."""
+        self.sync_now_btn.setEnabled(True)
+        self.sync_status_label.setText(message)
+
 
 
 class QueueItemWidget(QFrame):
@@ -1433,6 +1561,9 @@ class MainWindow(QMainWindow):
         
         # Load saved output settings
         self._load_output_settings()
+        
+        # Trigger auto-sync shortly after startup
+        QTimer.singleShot(2000, self._auto_sync)
     
     def _load_output_settings(self):
         """Load quality and format settings from config."""
@@ -2190,34 +2321,62 @@ class MainWindow(QMainWindow):
                     f.write(f"[PIPE] {line}\n")
                 
                 # Update progress based on step markers
+                # Update progress based on step markers
                 if is_analysis_pass:
                     # Analysis Phases (0-50%)
                     if "STEP 1" in line:
-                        self.progress_update.emit(item.id, 0.05, "Detecting profanity...")
-                    elif "PROGRESS:" in line and "Step 1" in line:
+                         self.progress_update.emit(item.id, 0.05, "Starting parallel analysis...")
+                    
+                    # Parallel Progress Parsing
+                    elif "[AUDIO] PROGRESS:" in line:
                         try:
-                            percent = int(line.split(":")[1].split("%")[0].strip())
-                            # 5% -> 20%
-                            total = 0.05 + (percent / 100.0 * 0.15)
-                            self.progress_update.emit(item.id, total, f"Scanning audio... {percent}%")
-                        except: pass
-                    elif "STEP 2:" in line and "Nudity" in line:
-                        self.progress_update.emit(item.id, 0.20, "Detecting nudity...")
-                    elif "Analyzing frames" in line:
+                            # [AUDIO] PROGRESS: 45% -> Parse percent
+                            pct = int(line.split("PROGRESS:")[1].split("%")[0].strip())
+                            # Store audio progress on item (temporary attribute)
+                            if not hasattr(item, 'audio_progress'): item.audio_progress = 0
+                            item.audio_progress = pct
+                            
+                            # Calculate combined progress (approx.)
+                            # Audio 0-100 scales to 0-50 overall (Phase 1)
+                            # Video 0-100 scales to 0-50 overall (Phase 2, now parallel)
+                            # We'll average them for display if both running?
+                            # For simplicity:
+                            # Audio accounts for 20% of effort
+                            # Video accounts for 30% of effort
+                            # Total Analysis = 50%
+                            
+                            v_pct = getattr(item, 'video_progress', 0)
+                            combined = (pct * 0.2 + v_pct * 0.3) / 100.0
+                            
+                            msg = f"Analyzing: Audio {pct}% | Video {v_pct}%"
+                            self.progress_update.emit(item.id, combined, msg)
+                        except:
+                            pass
+                            
+                    elif "[VIDEO] PROGRESS:" in line:
                         try:
-                            parts = line.split("|")
-                            if len(parts) > 1 and "%" in parts[0]:
-                                pct_str = parts[0].split("frames:")[-1].replace("%", "").strip()
-                                if pct_str:
-                                    percent = int(pct_str)
-                                    # 25% -> 40%
-                                    total = 0.25 + (percent / 100.0 * 0.15)
-                                    self.progress_update.emit(item.id, total, f"Scanning video... {percent}%")
-                        except: pass
+                            # [VIDEO] PROGRESS: 30%
+                            pct = int(line.split("PROGRESS:")[1].split("%")[0].strip())
+                            if not hasattr(item, 'video_progress'): item.video_progress = 0
+                            item.video_progress = pct
+                            
+                            a_pct = getattr(item, 'audio_progress', 0)
+                            combined = (a_pct * 0.2 + pct * 0.3) / 100.0
+                            
+                            msg = f"Analyzing: Audio {a_pct}% | Video {pct}%"
+                            self.progress_update.emit(item.id, combined, msg)
+                        except:
+                            pass
+                    
                     elif "STEP 2.5" in line:
-                        self.progress_update.emit(item.id, 0.40, "Detecting sexual content...")
+                         self.progress_update.emit(item.id, 0.50, "Sexual content detection...")
                     elif "STEP 2.7" in line:
-                        self.progress_update.emit(item.id, 0.45, "Detecting violence...")
+                         self.progress_update.emit(item.id, 0.51, "Violence detection...")
+                    elif "STEP 3" in line:
+                         self.progress_update.emit(item.id, 0.52, "Planning edits...")
+
+
+
                     elif "Analysis complete" in line:
                         self.progress_update.emit(item.id, 0.50, "Analysis complete")
                         
@@ -2283,3 +2442,61 @@ class MainWindow(QMainWindow):
         dialog = ProfileDialog(self.profile_manager, self)
         dialog.exec()
         self.preference_panel.refresh_profiles()
+
+    def _auto_sync(self):
+        """Run auto-sync if enabled."""
+        try:
+            config = self.preference_panel.config
+            if not config.sync.enabled or not config.sync.auto_sync or not config.sync.user_id:
+                return
+
+            if self.preference_panel.sync_status_label:
+                self.preference_panel.sync_status_label.setText("Syncing...")
+            
+            # Use the existing thread logic?
+            # Or duplicative lightweight thread
+            threading.Thread(target=self._run_auto_sync_thread, daemon=True).start()
+        except Exception as e:
+            print(f"Auto-sync failed to start: {e}")
+
+    def _run_auto_sync_thread(self):
+        """Worker for auto-sync."""
+        try:
+            config = self.preference_panel.config
+            from video_censor.profanity.wordlist import sync_custom_wordlist
+            from video_censor.presets import sync_presets
+            
+            sync_custom_wordlist(config)
+            sync_presets(config)
+            
+            # Update UI if alive
+            QTimer.singleShot(0, lambda: self._on_auto_sync_complete())
+        except Exception as e:
+            print(f"Auto-sync error: {e}")
+
+    def _on_auto_sync_complete(self):
+        try:
+            if self.preference_panel.sync_status_label:
+                self.preference_panel.sync_status_label.setText("Synced (Auto)")
+        except:
+            pass
+
+    def closeEvent(self, event):
+        """Handle application close."""
+        # Trigger sync on close if enabled
+        # Note: This might not finish if we exit immediately.
+        # We can try running it synchronously or just kick it off and hope OS gives it a second.
+        # Ideally we block for a second or two.
+        try:
+            config = self.preference_panel.config
+            if config.sync.enabled and config.sync.auto_sync and config.sync.user_id:
+                print("Performing exit sync...")
+                # Run synchronously for exit
+                from video_censor.profanity.wordlist import sync_custom_wordlist
+                from video_censor.presets import sync_presets
+                sync_custom_wordlist(config)
+                sync_presets(config)
+        except Exception as e:
+            print(f"Exit sync failed: {e}")
+            
+        event.accept()
