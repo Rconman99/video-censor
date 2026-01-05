@@ -999,6 +999,44 @@ class QueueItemWidget(QFrame):
         self.review_btn.setVisible(item.is_review_ready)
         layout.addWidget(self.review_btn)
         
+        self.review_btn.setVisible(item.is_review_ready)
+        layout.addWidget(self.review_btn)
+        
+        # Parallel Progress (Audio/Video tracks)
+        self.parallel_widget = QWidget()
+        self.parallel_widget.setVisible(False)
+        p_layout = QVBoxLayout(self.parallel_widget)
+        p_layout.setContentsMargins(0, 4, 0, 4)
+        p_layout.setSpacing(4)
+        
+        # Audio track
+        a_row = QHBoxLayout()
+        a_lbl = QLabel("AUDIO")
+        a_lbl.setFixedWidth(40)
+        a_lbl.setStyleSheet("font-size: 9px; font-weight: bold; color: #5a5a6a;")
+        self.audio_bar = QProgressBar()
+        self.audio_bar.setMaximumHeight(4)
+        self.audio_bar.setTextVisible(False)
+        self.audio_bar.setStyleSheet("QProgressBar::chunk { background-color: #818cf8; }") # Indigo
+        a_row.addWidget(a_lbl)
+        a_row.addWidget(self.audio_bar)
+        p_layout.addLayout(a_row)
+        
+        # Video track
+        v_row = QHBoxLayout()
+        v_lbl = QLabel("VIDEO")
+        v_lbl.setFixedWidth(40)
+        v_lbl.setStyleSheet("font-size: 9px; font-weight: bold; color: #5a5a6a;")
+        self.video_bar = QProgressBar()
+        self.video_bar.setMaximumHeight(4)
+        self.video_bar.setTextVisible(False)
+        self.video_bar.setStyleSheet("QProgressBar::chunk { background-color: #34d399; }") # Emerald
+        v_row.addWidget(v_lbl)
+        v_row.addWidget(self.video_bar)
+        p_layout.addLayout(v_row)
+        
+        layout.addWidget(self.parallel_widget)
+        
         # Progress row (bar + cancel button)
         progress_row = QHBoxLayout()
         progress_row.setSpacing(8)
@@ -1085,6 +1123,16 @@ class QueueItemWidget(QFrame):
         self.status_label.setText(self.item.status_display())
         self.status_label.setStyleSheet(f"color: {self._status_color()}; font-size: 11px; background: transparent;")
         self.progress_bar.setValue(int(self.item.progress * 100))
+        
+        # Parallel Progress Logic
+        show_parallel = hasattr(self.item, 'audio_progress') and (self.item.audio_progress > 0 or self.item.video_progress > 0)
+        show_parallel = show_parallel and self.item.status in ['analyzing', 'processing']
+        
+        if hasattr(self, 'parallel_widget'):
+            self.parallel_widget.setVisible(show_parallel)
+            if show_parallel:
+                self.audio_bar.setValue(int(getattr(self.item, 'audio_progress', 0)))
+                self.video_bar.setValue(int(getattr(self.item, 'video_progress', 0)))
         
         if hasattr(self, 'review_btn'):
             self.review_btn.setVisible(self.item.is_review_ready)
@@ -2332,23 +2380,11 @@ class MainWindow(QMainWindow):
                         try:
                             # [AUDIO] PROGRESS: 45% -> Parse percent
                             pct = int(line.split("PROGRESS:")[1].split("%")[0].strip())
-                            # Store audio progress on item (temporary attribute)
-                            if not hasattr(item, 'audio_progress'): item.audio_progress = 0
-                            item.audio_progress = pct
                             
-                            # Calculate combined progress (approx.)
-                            # Audio 0-100 scales to 0-50 overall (Phase 1)
-                            # Video 0-100 scales to 0-50 overall (Phase 2, now parallel)
-                            # We'll average them for display if both running?
-                            # For simplicity:
-                            # Audio accounts for 20% of effort
-                            # Video accounts for 30% of effort
-                            # Total Analysis = 50%
+                            # Update item with new method
+                            combined = item.update_parallel_progress(audio_pct=pct)
                             
-                            v_pct = getattr(item, 'video_progress', 0)
-                            combined = (pct * 0.2 + v_pct * 0.3) / 100.0
-                            
-                            msg = f"Analyzing: Audio {pct}% | Video {v_pct}%"
+                            msg = f"Analyzing: Audio {int(item.audio_progress)}% | Video {int(item.video_progress)}%"
                             self.progress_update.emit(item.id, combined, msg)
                         except:
                             pass
@@ -2357,13 +2393,11 @@ class MainWindow(QMainWindow):
                         try:
                             # [VIDEO] PROGRESS: 30%
                             pct = int(line.split("PROGRESS:")[1].split("%")[0].strip())
-                            if not hasattr(item, 'video_progress'): item.video_progress = 0
-                            item.video_progress = pct
                             
-                            a_pct = getattr(item, 'audio_progress', 0)
-                            combined = (a_pct * 0.2 + pct * 0.3) / 100.0
+                            # Update item with new method
+                            combined = item.update_parallel_progress(video_pct=pct)
                             
-                            msg = f"Analyzing: Audio {a_pct}% | Video {pct}%"
+                            msg = f"Analyzing: Audio {int(item.audio_progress)}% | Video {int(item.video_progress)}%"
                             self.progress_update.emit(item.id, combined, msg)
                         except:
                             pass

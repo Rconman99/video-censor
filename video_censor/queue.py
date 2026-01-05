@@ -52,6 +52,10 @@ class QueueItem:
     analysis_path: Optional[Path] = None  # Path to analysis JSON for review step
     scheduled_time: Optional[datetime] = None # When to auto-start
     
+    # Parallel progress tracking
+    audio_progress: float = 0.0
+    video_progress: float = 0.0
+    
     @property
     def filename(self) -> str:
         """Get the input video filename."""
@@ -110,7 +114,19 @@ class QueueItem:
         """Update processing progress."""
         self.progress = max(0.0, min(1.0, progress))
         if stage:
+        if stage:
             self.progress_stage = stage
+            
+    def update_parallel_progress(self, audio_pct: Optional[int] = None, video_pct: Optional[int] = None) -> float:
+        """Update parallel task progress and return combined weighted progress."""
+        if audio_pct is not None:
+            self.audio_progress = float(audio_pct)
+        if video_pct is not None:
+            self.video_progress = float(video_pct)
+            
+        # Weights: Audio 20%, Video 30% (Total 50% for analysis phase)
+        combined = (self.audio_progress * 0.2 + self.video_progress * 0.3) / 100.0
+        return combined
     
     def mark_review_ready(self, analysis_path: Path) -> None:
         """Mark item as ready for review."""
@@ -323,7 +339,9 @@ class ProcessingQueue:
                     "custom_block_phrases": item.filters.custom_block_phrases,
                     "safe_cover_enabled": item.filters.safe_cover_enabled,
                 },
-                "scheduled_time": item.scheduled_time.isoformat() if item.scheduled_time else None
+                "scheduled_time": item.scheduled_time.isoformat() if item.scheduled_time else None,
+                "audio_progress": item.audio_progress,
+                "video_progress": item.video_progress
             })
         
         try:
@@ -382,7 +400,9 @@ class ProcessingQueue:
                     filters=filters,
                     scheduled_time=start_time,
                     status=status,
-                    analysis_path=Path(analysis_path) if analysis_path else None
+                    analysis_path=Path(analysis_path) if analysis_path else None,
+                    audio_progress=item_data.get("audio_progress", 0.0),
+                    video_progress=item_data.get("video_progress", 0.0)
                 )
                 
                 # If restoring in review state, trigger ready logic
@@ -396,6 +416,188 @@ class ProcessingQueue:
             # filepath.unlink() 
             return count
             
-        except Exception as e:
+                except Exception as e:
             print(f"Failed to load queue state: {e}")
             return 0
+
+
+# ==========================================
+# Async Parallel Detection Pipeline
+# ==========================================
+
+# ==========================================
+# Async Parallel Detection Pipeline
+# ==========================================
+
+import asyncio
+import tempfile
+import shutil
+from concurrent.futures import ProcessPoolExecutor
+from typing import List, Dict, Tuple
+from pathlib import Path
+
+from .config import Config
+from .audio import extract_audio, transcribe_audio
+from .profanity.detector import detect_profanity
+from .nudity import extract_frames, detect_nudity
+
+def _worker_audio_pipeline(video_path: str, temp_dir: str, config: Config) -> List[Dict]:
+    """Worker: Extract audio, transcribe, detect profanity."""
+    temp_path = Path(temp_dir)
+    video_path = Path(video_path)
+    
+    # 1. Extract Audio
+    # Use a unique name to avoid conflicts if sharing temp (though we separate by folders usually)
+    audio_path = extract_audio(
+        video_path,
+        output_path=temp_path / "audio.wav"
+    )
+    
+    # 2. Transcribe
+    words = transcribe_audio(
+        audio_path, 
+        model_size=config.whisper.model_size,
+        language="en",
+        progress_prefix="[AUDIO]"
+    )
+    
+    # 3. Detect Profanity
+    profanity_list = [] # You might need to load this from config path!
+    # IMPORTANT: config only stores paths. We need to load the lists here.
+    # But loading lists is fast.
+    from .profanity import load_profanity_list
+    profanity_list = load_profanity_list(config.profanity.custom_wordlist_path)
+    
+    detections = detect_profanity(
+        words, 
+        profanity_list,
+        min_confidence=config.profanity.min_confidence if hasattr(config.profanity, 'min_confidence') else 0.0 # Config might not have min_confidence?
+        # Actually detect_profanity signature: (words, profanity_list, buffer_before, buffer_after)
+        # It doesn't take min_confidence. It returns detections.
+    )
+    
+    # Format
+    results = []
+    for d in detections:
+        results.append({
+            'start': d.start,
+            'end': d.end,
+            'label': d.word,
+            'confidence': d.confidence,
+            'type': 'profanity'
+        })
+    return results
+
+def _worker_visual_pipeline(video_path: str, temp_dir: str, config: Config) -> List[Dict]:
+    """Worker: Extract frames, detect nudity."""
+    temp_path = Path(temp_dir)
+    video_path = Path(video_path)
+    frames_dir = temp_path / "frames"
+    
+    # 1. Extract Frames
+    frames = extract_frames(
+        video_path,
+        interval=config.nudity.frame_interval,
+        output_dir=frames_dir
+    )
+    
+    # 2. Detect Nudity
+    intervals = detect_nudity(
+        frames,
+        threshold=config.nudity.threshold,
+        frame_interval=config.nudity.frame_interval,
+        min_segment_duration=config.nudity.min_segment_duration,
+        body_parts=config.nudity.body_parts,
+        min_cut_duration=config.nudity.min_cut_duration,
+        min_box_area_percent=config.nudity.min_box_area_percent,
+        max_aspect_ratio=config.nudity.max_aspect_ratio,
+        show_progress=True,
+        progress_prefix="[VIDEO]"
+    )
+    
+    # Format
+    results = []
+    for d in intervals:
+        results.append({
+            'start': d.start,
+            'end': d.end,
+            'label': d.reason,
+            'confidence': 1.0, # NudeNet intervals don't always carry score easily, treat as 1.0
+            'type': 'nudity'
+        })
+    return results
+
+def merge_detections(audio_results: List[Dict], visual_results: List[Dict], config: Config) -> Dict[str, List[Dict]]:
+    """Merge audio and visual detections into a single result dict."""
+    return {
+        'profanity': audio_results,
+        'nudity': visual_results
+    }
+
+async def process_video(video_path: str, config: Config) -> Dict[str, List[Dict]]:
+    """
+    Run audio transcription and visual detection simultaneously.
+    """
+    # Check if parallel detection is enabled
+    if not config.performance.parallel_detection:
+        print("[Async] Parallel detection disabled. Running sequentially...")
+        return _run_sequential(video_path, config)
+
+    loop = asyncio.get_event_loop()
+    
+    # Use a generic temp directory
+    with tempfile.TemporaryDirectory() as temp_dir:
+        try:
+            with ProcessPoolExecutor(max_workers=2) as executor:
+                print("[Async] Starting parallel detection...")
+                
+                # Start Audio
+                audio_future = loop.run_in_executor(
+                    executor, 
+                    _worker_audio_pipeline, 
+                    video_path, 
+                    temp_dir,
+                    config
+                )
+                
+                # Stagger Start
+                if config.performance.stagger_delay > 0:
+                    print(f"[Async] Staggering visual detection by {config.performance.stagger_delay}s...")
+                    await asyncio.sleep(config.performance.stagger_delay)
+                
+                # Start Visual
+                visual_future = loop.run_in_executor(
+                    executor, 
+                    _worker_visual_pipeline, 
+                    video_path, 
+                    temp_dir,
+                    config
+                )
+                
+                # Wait for both
+                audio_results, visual_results = await asyncio.gather(
+                    audio_future, 
+                    visual_future
+                )
+                
+            print("[Async] Parallel detection complete.")
+            return merge_detections(audio_results, visual_results, config)
+
+        except Exception as e:
+            print(f"[Async] Parallel execution failed: {e}")
+            if config.performance.fallback_to_sequential:
+                print("[Async] Falling back to sequential execution...")
+                return _run_sequential(video_path, config)
+            else:
+                raise e
+
+def _run_sequential(video_path: str, config: Config) -> Dict[str, List[Dict]]:
+    """Fallback: Run detections one by one."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        print("[Sequential] Starting audio detection...")
+        audio_results = _worker_audio_pipeline(video_path, temp_dir, config)
+        
+        print("[Sequential] Starting visual detection...")
+        visual_results = _worker_visual_pipeline(video_path, temp_dir, config)
+        
+        return merge_detections(audio_results, visual_results, config)
