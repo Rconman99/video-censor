@@ -11,7 +11,8 @@ Provides comprehensive profanity detection including:
 import logging
 import re
 from pathlib import Path
-from typing import Set, List, Dict
+from typing import Set, List, Dict, Optional
+from .whitelist import DEFAULT_WHITELIST, ALWAYS_FLAG
 
 logger = logging.getLogger(__name__)
 
@@ -365,7 +366,7 @@ def save_profanity_list(words: Set[str], output_path: Path) -> None:
     logger.info(f"Saved {len(words)} words to {output_path}")
 
 
-def sync_custom_wordlist(config: 'Config') -> bool:
+async def sync_custom_wordlist(config: 'Config') -> bool:
     """
     Synchronize custom wordlist with the cloud.
     
@@ -401,7 +402,7 @@ def sync_custom_wordlist(config: 'Config') -> bool:
     local_custom = local_words_all - DEFAULT_PROFANITY
     
     # 2. Pull remote words
-    remote_words = manager.pull_wordlist()
+    remote_words = await manager.pull_wordlist()
     
     if remote_words is None:
         return False
@@ -417,6 +418,62 @@ def sync_custom_wordlist(config: 'Config') -> bool:
         
     if len(merged) > len(remote_words):
         logger.info(f"Sync: Uploading {len(merged) - len(remote_words)} new words")
-        manager.push_wordlist(list(merged))
+        await manager.push_wordlist(list(merged))
         
     return True
+
+
+class ProfanityDetector:
+    """
+    Regex-based profanity detector with whitelist support.
+    
+    Replaces simple string matching to avoid "Scunthorpe problem"
+    (e.g., "Good" -> "god", "Christopher" -> "christ").
+    """
+    
+    def __init__(self, words: Set[str], whitelist: Set[str] = None):
+        self.words = {w.lower() for w in words}
+        self.whitelist = {w.lower() for w in (whitelist or [])}
+        # Add default whitelist
+        self.whitelist.update(DEFAULT_WHITELIST)
+        
+        # Build patterns
+        # We sort by length (descending) to match longer words first
+        sorted_words = sorted(self.words, key=len, reverse=True)
+        
+        # Build one giant regex matching \b(word1|word2|...)\b
+        # Escape special (regex) characters in words (like d*ck)
+        pattern_str = "|".join(re.escape(w) for w in sorted_words)
+        self.pattern = re.compile(r'\b(' + pattern_str + r')\b', re.IGNORECASE)
+        
+    def find_matches(self, text: str) -> List[Dict]:
+        """
+        Find profanity in text using whole-word matching.
+        
+        Args:
+            text: Text to search
+            
+        Returns:
+            List of dicts with match info
+        """
+        results = []
+        
+        # Iterate over all regex matches
+        for match in self.pattern.finditer(text):
+            matched_word = match.group()
+            lower_word = matched_word.lower()
+            
+            # Check whitelist collision (primary check)
+            if lower_word in self.whitelist:
+                # But is it in ALWAYS_FLAG? e.g. "shitty" might be in whitelist by mistake?
+                if lower_word not in ALWAYS_FLAG:
+                    continue
+            
+            results.append({
+                'word': lower_word, # The pattern matched (normalized)
+                'matched': matched_word, # The actual text
+                'start': match.start(),
+                'end': match.end()
+            })
+            
+        return results

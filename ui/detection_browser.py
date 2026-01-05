@@ -23,6 +23,11 @@ except ImportError:
 # Import card components
 from ui.components.detection_card import MiniDetectionCard, SceneCard, DetectionCard
 from ui.components.hover_preview import HoverPreview
+from ui.components.detection_group_header import DetectionGroupHeader
+from ui.components.tier_header import TierHeader
+from video_censor.profanity.severity import get_severity
+from collections import defaultdict
+from video_censor.config import Config
 
 
 class CollapsibleSection(QFrame):
@@ -125,15 +130,49 @@ class DetectionBrowserPanel(QFrame):
         self.cards = []  # Current review card widgets
         self.selected_segments = set()  # Track selected segment IDs
         self.scene_mode = False  # Scene grouping mode
+        self.group_by_word = False # Group by word mode
         self.scene_gap = 5.0  # Default scene gap in seconds
         self.scenes = []  # Grouped scenes for current track
         
         self.hover_preview = HoverPreview(self)
         
+        # Load config for severity overrides
+        try:
+            self.config = Config.load(Path(__file__).parent.parent / "config.yaml")
+        except Exception as e:
+            print(f"Error loading config in DetectionBrowser: {e}")
+            self.config = Config()
+        
         # Enable keyboard focus
         self.setFocusPolicy(Qt.StrongFocus)
         
         self._create_ui()
+
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts."""
+        key = event.key()
+        
+        # Group toggle
+        if key == Qt.Key_G:
+           self.group_toggle.click()
+           return
+
+        # Tier batch actions (only in tiered group mode)
+        if self.group_by_word:
+            if key == Qt.Key_1:
+                 # Keep Severe (Order 1)
+                 self._on_batch_tier_keep("severe")
+            elif key == Qt.Key_2:
+                 # Keep Moderate (Order 2)
+                 self._on_batch_tier_keep("moderate")
+            elif key == Qt.Key_3:
+                 # Keep Mild (Order 3)
+                 self._on_batch_tier_keep("mild")
+            elif key == Qt.Key_4:
+                 # Skip Religious (Order 4)
+                 self._on_batch_tier_skip("religious")
+            
+        super().keyPressEvent(event)
         
     def _create_ui(self):
         layout = QVBoxLayout(self)
@@ -254,6 +293,30 @@ class DetectionBrowserPanel(QFrame):
         self.scene_toggle.setVisible(False)  # Only shown for nudity
         self.scene_toggle.stateChanged.connect(self._on_scene_toggle)
         selection_bar.addWidget(self.scene_toggle)
+        
+        # Group by Word Toggle (for Profanity)
+        self.group_word_toggle = QCheckBox("🔡 Group Words")
+        self.group_word_toggle.setToolTip("Group detections by word for batch review")
+        self.group_word_toggle.setStyleSheet("""
+            QCheckBox {
+                color: #3b82f6;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border-radius: 3px;
+                border: 2px solid #3b82f6;
+                background: #1a1a24;
+            }
+            QCheckBox::indicator:checked {
+                background: #3b82f6;
+            }
+        """)
+        self.group_word_toggle.setVisible(False) 
+        self.group_word_toggle.stateChanged.connect(self._on_group_word_toggle)
+        selection_bar.addWidget(self.group_word_toggle)
         
         layout.addLayout(selection_bar)
         
@@ -446,6 +509,10 @@ class DetectionBrowserPanel(QFrame):
         self.scene_toggle.setVisible(track_key == 'nudity' and HAS_SCENE_GROUPING)
         self.scene_mode = self.scene_toggle.isChecked() and track_key == 'nudity'
         
+        # Show group by word only for profanity
+        self.group_word_toggle.setVisible(track_key == 'profanity')
+        self.group_by_word = self.group_word_toggle.isChecked() and track_key == 'profanity'
+        
         self._refresh_all_sections()
         
     def _refresh_all_sections(self):
@@ -474,6 +541,8 @@ class DetectionBrowserPanel(QFrame):
         # Build To Review
         if self.scene_mode and HAS_SCENE_GROUPING:
             self._build_scene_cards(to_review)
+        elif self.group_by_word:
+            self._build_tiered_grouped_cards(to_review)
         else:
             self._build_detection_cards(to_review)
         
@@ -539,6 +608,145 @@ class DetectionBrowserPanel(QFrame):
             self.review_layout.addWidget(card)
             self.cards.append(card)
             
+
+    def _build_tiered_grouped_cards(self, to_review: list):
+        """Builds detections grouped by severity tier, then by word."""
+        # 1. Group data: Tier -> Word -> [segments]
+        # keys: (tier_order, tier_name, tier_color)
+        tiers = defaultdict(lambda: defaultdict(list))
+        
+        for segment in to_review:
+            # Determine word
+            meta = segment.get('metadata', {})
+            word = meta.get('matched_pattern') or meta.get('word') or segment.get('label') or "Unknown"
+            
+            # Determine severity with overrides and custom tiers
+            overrides = self.config.profanity.severity_overrides
+            custom_tiers = self.config.profanity.custom_tiers
+            
+            tier_name, order, color = get_severity(word, overrides, custom_tiers)
+            
+            # No skipping - everything gets grouped
+            tiers[(order, tier_name, color)][word.lower()].append(segment)
+            
+        # 2. Sort tiers by order
+        sorted_tiers = sorted(tiers.items(), key=lambda x: x[0][0])
+        
+        # 3. Create Widgets
+        total = len(to_review)
+        global_idx = 0
+        
+        for (order, tier_name, color), word_groups in sorted_tiers:
+            # Tier Header
+            # Calculate total detections in this tier
+            tier_total = sum(len(segs) for segs in word_groups.values())
+            
+            tier_header = TierHeader(tier_name, color, tier_total)
+            tier_header.keep_all_tier_requested.connect(lambda t=tier_name: self._on_batch_tier_keep(t))
+            tier_header.skip_all_tier_requested.connect(lambda t=tier_name: self._on_batch_tier_skip(t))
+            self.review_layout.addWidget(tier_header)
+            
+            # Sort words within tier by count (descending)
+            sorted_words = sorted(word_groups.items(), key=lambda x: len(x[1]), reverse=True)
+            
+            for word, segments in sorted_words:
+                # Word Group Header
+                # Pass explicit tier color to header
+                header = DetectionGroupHeader(word.title(), len(segments), color=color)
+                header.keep_all_requested.connect(self._on_batch_group_keep)
+                header.skip_all_requested.connect(self._on_batch_group_skip)
+                
+                self.review_layout.addWidget(header)
+                
+                for segment in segments:
+                    card = DetectionCard(segment, global_idx, total)
+                    card.keep_clicked.connect(self._on_keep)
+                    card.delete_clicked.connect(self._on_delete)
+                    card.card_clicked.connect(self._on_card_clicked)
+                    card.selection_changed.connect(self._on_selection_changed)
+                    
+                    # Initially hidden? Header defaults to collapsed=False (Wait, I set it to False/collapsed in prev step)
+                    # So cards need to be added to layout but might need to be hidden initially if header controls logic
+                    # The header implementation `set_expanded` toggles visibility. 
+                    # If we add them to layout, they are visible by default unless we hide them.
+                    # We should align with header state.
+                    if not header.expanded:
+                        card.setVisible(False)
+                        
+                    self.review_layout.addWidget(card)
+                    self.cards.append(card)
+                    
+                    header.add_child_card(card)
+                    
+                    global_idx += 1
+
+    def _on_batch_tier_keep(self, tier_name):
+        """Keep all items in a named tier."""
+        if not self.current_track: return
+        
+        overrides = self.config.profanity.severity_overrides
+        custom_tiers = self.config.profanity.custom_tiers
+        to_review = list(self.data.get(self.current_track, []))
+        
+        for segment in to_review:
+             meta = segment.get('metadata', {})
+             word = meta.get('matched_pattern') or meta.get('word') or segment.get('label') or "Unknown"
+             t_name, _, _ = get_severity(word, overrides, custom_tiers)
+             
+             if t_name == tier_name:
+                 self._on_keep(segment, refresh=False)
+                 
+        self._refresh_all_sections()
+        
+    def _on_batch_tier_skip(self, tier_name):
+        """Skip (delete) all items in a named tier."""
+        if not self.current_track: return
+        
+        overrides = self.config.profanity.severity_overrides
+        custom_tiers = self.config.profanity.custom_tiers
+        to_review = list(self.data.get(self.current_track, []))
+        
+        for segment in to_review:
+             meta = segment.get('metadata', {})
+             word = meta.get('matched_pattern') or meta.get('word') or segment.get('label') or "Unknown"
+             t_name, _, _ = get_severity(word, overrides, custom_tiers)
+             
+             if t_name == tier_name:
+                 self._on_delete(segment, refresh=False)
+                 
+        self._refresh_all_sections()
+                
+    def _on_batch_group_keep(self, word):
+        """Keep all items in a named group."""
+        if not self.current_track: return
+        
+        # Find all segments matching this word
+        to_review = list(self.data.get(self.current_track, []))
+        for segment in to_review:
+             meta = segment.get('metadata', {})
+             w = meta.get('matched_pattern') or meta.get('word') or segment.get('label') or "Unknown"
+             if w.lower() == word.lower():
+                 self._on_keep(segment, refresh=False)
+                 
+        self._refresh_all_sections()
+        
+    def _on_batch_group_skip(self, word):
+        """Delete all items in a named group."""
+        if not self.current_track: return
+        
+        to_review = list(self.data.get(self.current_track, []))
+        for segment in to_review:
+             meta = segment.get('metadata', {})
+             w = meta.get('matched_pattern') or meta.get('word') or segment.get('label') or "Unknown"
+             if w.lower() == word.lower():
+                 self._on_delete(segment, refresh=False)
+                 
+        self._refresh_all_sections()
+
+    def _on_group_word_toggle(self, state):
+        self.group_by_word = (state == Qt.Checked)
+        self._refresh_all_sections()
+
     def _on_card_hover_start(self, segment):
         """Show hover preview."""
         if self.video_path:
@@ -928,4 +1136,4 @@ class DetectionBrowserPanel(QFrame):
             for s in list(self.data.get(self.current_track, [])):
                 self._on_delete(s, refresh=False)
         self._refresh_all_sections()
-```
+

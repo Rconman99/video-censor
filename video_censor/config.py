@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class DetectionCacheConfig:
+    """Configuration for detection caching."""
+    auto_save: bool = True           # Save detections after processing
+    auto_load: bool = True           # Prompt to load if detection file exists
+    cache_directory: Optional[str] = None  # null = same directory as video
+
+
+@dataclass
 class SystemConfig:
     """System-level configuration."""
     performance_mode: str = "low_power"  # high, balanced, low_power
@@ -66,6 +74,19 @@ class ProfanityConfig:
     dynamic_buffer_factor: float = 0.02  # Extra seconds per character
     # LLM-based context analysis (requires llm.enabled = true)
     context_aware: bool = False  # Check if profanity is quoted/discussed
+    
+    # False Positive Reduction
+    use_whitelist: bool = True
+    custom_whitelist: list = field(default_factory=list)  # Add your own safe words
+    custom_blacklist: list = field(default_factory=list)  # Add words to always flag
+    
+    # Severity Customization
+    # Dictionary mapping word -> tier name (e.g. "heck": "mild")
+    severity_overrides: dict = field(default_factory=dict)
+    
+    # Custom Tiers (list of dicts with name, order, color, words)
+    custom_tiers: list = field(default_factory=list)
+
 
 
 @dataclass
@@ -209,6 +230,7 @@ class Config:
     performance: PerformanceConfig = field(default_factory=PerformanceConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    detection_cache: DetectionCacheConfig = field(default_factory=DetectionCacheConfig)
     
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "Config":
@@ -301,6 +323,12 @@ class Config:
                 for key, value in data['llm'].items():
                     if hasattr(config.llm, key):
                         setattr(config.llm, key, value)
+            
+            # Update detection cache config
+            if 'detection_cache' in data:
+                for key, value in data['detection_cache'].items():
+                    if hasattr(config.detection_cache, key):
+                        setattr(config.detection_cache, key, value)
         
         return config
     

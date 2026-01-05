@@ -64,6 +64,7 @@ def extract_frames(
     # Build ffmpeg command
     cmd = [
         'ffmpeg',
+        '-nostdin', # Prevent reading from stdin
         '-y',  # Overwrite output
         '-i', str(video_path),
     ]

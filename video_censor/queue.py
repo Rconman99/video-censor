@@ -114,7 +114,6 @@ class QueueItem:
         """Update processing progress."""
         self.progress = max(0.0, min(1.0, progress))
         if stage:
-        if stage:
             self.progress_stage = stage
             
     def update_parallel_progress(self, audio_pct: Optional[int] = None, video_pct: Optional[int] = None) -> float:
@@ -416,18 +415,9 @@ class ProcessingQueue:
             # filepath.unlink() 
             return count
             
-                except Exception as e:
+        except Exception as e:
             print(f"Failed to load queue state: {e}")
             return 0
-
-
-# ==========================================
-# Async Parallel Detection Pipeline
-# ==========================================
-
-# ==========================================
-# Async Parallel Detection Pipeline
-# ==========================================
 
 import asyncio
 import tempfile
@@ -440,6 +430,8 @@ from .config import Config
 from .audio import extract_audio, transcribe_audio
 from .profanity.detector import detect_profanity
 from .nudity import extract_frames, detect_nudity
+from .detection.serializer import DetectionSerializer
+from .editing.intervals import TimeInterval, Action, MatchSource
 
 def _worker_audio_pipeline(video_path: str, temp_dir: str, config: Config) -> List[Dict]:
     """Worker: Extract audio, transcribe, detect profanity."""
@@ -482,8 +474,8 @@ def _worker_audio_pipeline(video_path: str, temp_dir: str, config: Config) -> Li
         results.append({
             'start': d.start,
             'end': d.end,
-            'label': d.word,
-            'confidence': d.confidence,
+            'label': d.metadata.get('word', 'profanity'),
+            'confidence': d.metadata.get('confidence', 1.0),
             'type': 'profanity'
         })
     return results
@@ -536,10 +528,18 @@ def merge_detections(audio_results: List[Dict], visual_results: List[Dict], conf
 
 async def process_video(video_path: str, config: Config) -> Dict[str, List[Dict]]:
     """
-    Run audio transcription and visual detection simultaneously.
+    Run audio transcription and visual detection.
+    
+    Respects config.performance.performance_mode for resource usage.
     """
-    # Check if parallel detection is enabled
-    if not config.performance.parallel_detection:
+    # Force sequential if parallel disabled OR low power mode
+    # "low_power" mode means we want to save resources, so we shouldn't run parallel models
+    use_parallel = config.performance.parallel_detection
+    if config.system.performance_mode == "low_power":
+        use_parallel = False
+        print("[Async] Low Power Mode detected: Forcing sequential execution to prevent crash")
+
+    if not use_parallel:
         print("[Async] Parallel detection disabled. Running sequentially...")
         return _run_sequential(video_path, config)
 
@@ -581,7 +581,32 @@ async def process_video(video_path: str, config: Config) -> Dict[str, List[Dict]
                 )
                 
             print("[Async] Parallel detection complete.")
-            return merge_detections(audio_results, visual_results, config)
+            results = merge_detections(audio_results, visual_results, config)
+            
+            # Auto-save logic
+            if config.detection_cache.auto_save:
+                try:
+                    all_intervals = []
+                    # Convert dicts to TimeIntervals for saving
+                    for key, items in results.items():
+                        for item in items:
+                            # Map dict to TimeInterval
+                            ti = TimeInterval(
+                                start=item['start'],
+                                end=item['end'],
+                                reason=item['label'],
+                                action=Action.CUT if item['type'] == 'nudity' else Action.MUTE, # Assumption
+                                source=MatchSource.AI,
+                                metadata={'confidence': item.get('confidence', 1.0), 'type': item['type']}
+                            )
+                            all_intervals.append(ti)
+                    
+                    DetectionSerializer.save(video_path, all_intervals)
+                    print(f"Auto-saved {len(all_intervals)} detections.")
+                except Exception as e:
+                    print(f"Failed to auto-save detections: {e}")
+                    
+            return results
 
         except Exception as e:
             print(f"[Async] Parallel execution failed: {e}")
@@ -600,4 +625,27 @@ def _run_sequential(video_path: str, config: Config) -> Dict[str, List[Dict]]:
         print("[Sequential] Starting visual detection...")
         visual_results = _worker_visual_pipeline(video_path, temp_dir, config)
         
-        return merge_detections(audio_results, visual_results, config)
+        results = merge_detections(audio_results, visual_results, config)
+        
+        # Auto-save logic (dup for sequential)
+        if config.detection_cache.auto_save:
+            try:
+                all_intervals = []
+                for key, items in results.items():
+                    for item in items:
+                        ti = TimeInterval(
+                            start=item['start'],
+                            end=item['end'],
+                            reason=item['label'],
+                            action=Action.CUT if item['type'] == 'nudity' else Action.MUTE,
+                            source=MatchSource.AI,
+                            metadata={'confidence': item.get('confidence', 1.0), 'type': item['type']}
+                        )
+                        all_intervals.append(ti)
+                
+                DetectionSerializer.save(video_path, all_intervals)
+                print(f"Auto-saved {len(all_intervals)} detections.")
+            except Exception as e:
+                print(f"Failed to auto-save detections: {e}")
+                
+        return results

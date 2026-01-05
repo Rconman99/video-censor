@@ -22,6 +22,7 @@ class ReviewPanel(QFrame):
     export_requested = Signal()  # Emitted when user clicks Export
     cancel_requested = Signal()  # Emitted when user clicks Cancel
     editor_requested = Signal()  # Emitted when user clicks Open Editor
+    data_changed = Signal()      # Emitted when data is modified
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -283,11 +284,13 @@ class ReviewPanel(QFrame):
         """Handle segment deletion from browser."""
         # Update timeline
         self.timeline.remove_segment(track_key, segment)
+        self.data_changed.emit()
         
     def _on_segment_kept(self, track_key: str, segment: dict):
         """Handle segment kept (ignored) from browser."""
         # Update timeline visualization
         self.timeline.update()
+        self.data_changed.emit()
         
     def _on_seek_to_segment(self, segment: dict):
         """Seek video to segment start."""

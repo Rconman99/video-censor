@@ -388,6 +388,7 @@ def analyze_content(
     violence_intervals = []
     frames = []
     words = []
+    subtitle_path = None
     
     # Run Step 1 (Audio) and Step 2 (Video) in parallel
     run_audio = not skip_profanity and video_info.has_audio
@@ -654,6 +655,14 @@ def process_video(
     
     start_time = time.time()
     
+    # Auto-detect macOS and force low_power if not effectively "high"
+    # This prevents the "crash" due to OOM when running parallel models on unified memory
+    import platform
+    if platform.system() == "Darwin" and config.system.performance_mode != "high":
+        if config.system.performance_mode != "low_power":
+            logger.info("🍎 macOS detected: Defaulting to Low Power Mode for stability (Sequential Processing)")
+            config.system.performance_mode = "low_power"
+
     # helper to apply performance overrides
     if config.system.performance_mode == "low_power":
         logger.info("⚡ Low Power Mode Enabled: Optimizing for limited resources")
@@ -687,27 +696,15 @@ def process_video(
         # Check if importing intervals (Skip detection)
         if import_intervals_path and import_intervals_path.exists():
             logger.info(f"Importing intervals from {import_intervals_path}")
-            import json
-            from video_censor.editing.intervals import TimeInterval, Action, MatchSource
+            from video_censor.detection.serializer import deserialize_interval
             
             with open(import_intervals_path, 'r') as f:
                 data = json.load(f)
                 
-            def _dict_to_interval(d):
-                # Handle enums
-                if 'action' in d: d['action'] = Action(d['action'])
-                if 'source' in d: d['source'] = MatchSource(d['source'])
-                
-                # Filter keys to only those accepted by TimeInterval
-                valid_keys = {'start', 'end', 'reason', 'action', 'source', 'metadata'}
-                filtered_d = {k: v for k, v in d.items() if k in valid_keys}
-                
-                return TimeInterval(**filtered_d)
-                
-            profanity_intervals = [_dict_to_interval(d) for d in data.get('profanity', [])]
-            nudity_intervals = [_dict_to_interval(d) for d in data.get('nudity', [])]
-            sexual_content_intervals = [_dict_to_interval(d) for d in data.get('sexual_content', [])]
-            violence_intervals = [_dict_to_interval(d) for d in data.get('violence', [])]
+            profanity_intervals = [deserialize_interval(d) for d in data.get('profanity', [])]
+            nudity_intervals = [deserialize_interval(d) for d in data.get('nudity', [])]
+            sexual_content_intervals = [deserialize_interval(d) for d in data.get('sexual_content', [])]
+            violence_intervals = [deserialize_interval(d) for d in data.get('violence', [])]
             
             logger.info("Intervals loaded successfully.")
             
@@ -780,20 +777,13 @@ def process_video(
         # Export intervals if requested
         if export_intervals_path:
             import json
-            from dataclasses import asdict
-            
-            def _interval_to_dict(i):
-                d = asdict(i)
-                # Serialize enums
-                d['action'] = i.action.value
-                d['source'] = i.source.value
-                return d
+            from video_censor.detection.serializer import serialize_interval
                 
             data = {
-                'profanity': [_interval_to_dict(i) for i in profanity_intervals],
-                'nudity': [_interval_to_dict(i) for i in nudity_intervals],
-                'sexual_content': [_interval_to_dict(i) for i in sexual_content_intervals],
-                'violence': [_interval_to_dict(i) for i in violence_intervals]
+                'profanity': [serialize_interval(i) for i in profanity_intervals],
+                'nudity': [serialize_interval(i) for i in nudity_intervals],
+                'sexual_content': [serialize_interval(i) for i in sexual_content_intervals],
+                'violence': [serialize_interval(i) for i in violence_intervals]
             }
             
             with open(export_intervals_path, 'w') as f:
@@ -806,6 +796,21 @@ def process_video(
             return None
 
         # ... (Proceed to Planning & Rendering) ...
+        
+        # Auto-save logic (Sync with queue.py)
+        if config.detection_cache.auto_save:
+            try:
+                from video_censor.detection.serializer import DetectionSerializer
+                all_intervals = []
+                all_intervals.extend(profanity_intervals)
+                all_intervals.extend(nudity_intervals)
+                all_intervals.extend(sexual_content_intervals)
+                all_intervals.extend(violence_intervals)
+                
+                DetectionSerializer.save(input_path, all_intervals)
+                logger.info(f"Auto-saved {len(all_intervals)} detections to cache.")
+            except Exception as e:
+                logger.warning(f"Failed to auto-save detection cache: {e}")
         
         # Step 3: Plan edits
         logger.info("=" * 50)

@@ -188,7 +188,7 @@ def get_preset_summary(preset_name: str) -> str:
     return "\n".join(parts)
 
 
-def sync_presets(config: 'Config') -> bool:
+async def sync_presets(config: 'Config') -> bool:
     """
     Synchronize custom presets with the cloud.
     
@@ -208,7 +208,7 @@ def sync_presets(config: 'Config') -> bool:
         return True
         
     # 1. Pull remote presets
-    remote_presets = manager.pull_presets()
+    remote_presets = await manager.pull_presets()
     if remote_presets is None:
         return False
         

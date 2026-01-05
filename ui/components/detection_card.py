@@ -276,14 +276,16 @@ class SceneCard(QFrame):
         return f"{m}:{s:02d}"
     
     def _on_checkbox_changed(self, state):
-        self._is_selected = state == Qt.Checked
+        self._is_selected = (state != 0) # Robust check (Qt.Unchecked=0)
         self.selection_changed.emit(self.scene, self._is_selected)
         
     def set_selected(self, selected: bool):
-        self._is_selected = selected
-        self.checkbox.blockSignals(True)
-        self.checkbox.setChecked(selected)
-        self.checkbox.blockSignals(False)
+        if self._is_selected != selected:
+            self._is_selected = selected
+            self.checkbox.blockSignals(True)
+            self.checkbox.setChecked(selected)
+            self.checkbox.blockSignals(False)
+            self.selection_changed.emit(self.scene, selected)
         
     def is_selected(self) -> bool:
         return self._is_selected
@@ -517,15 +519,17 @@ class DetectionCard(QFrame):
     
     def _on_checkbox_changed(self, state):
         """Handle checkbox state change."""
-        self._is_selected = state == Qt.Checked
+        self._is_selected = (state != 0) # Robust check
         self.selection_changed.emit(self.segment, self._is_selected)
         
     def set_selected(self, selected: bool):
         """Programmatically set the selection state."""
-        self._is_selected = selected
-        self.checkbox.blockSignals(True)
-        self.checkbox.setChecked(selected)
-        self.checkbox.blockSignals(False)
+        if self._is_selected != selected:
+            self._is_selected = selected
+            self.checkbox.blockSignals(True)
+            self.checkbox.setChecked(selected)
+            self.checkbox.blockSignals(False)
+            self.selection_changed.emit(self.segment, selected)
         
     def is_selected(self) -> bool:
         """Return current selection state."""

@@ -15,10 +15,11 @@ from PySide6.QtWidgets import (
     QFrame, QComboBox, QCheckBox, QRadioButton, QButtonGroup, QPlainTextEdit,
     QScrollArea, QFileDialog, QListWidget, QListWidgetItem, QProgressBar,
     QSplitter, QSizePolicy, QGroupBox, QToolButton, QSpacerItem, QSlider, QLineEdit,
-    QTabWidget, QStackedWidget, QTimeEdit
+    QTabWidget, QStackedWidget, QTimeEdit, QStyle, QMenuBar, QMenu, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal, Slot, QMimeData, QTimer, QTime
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QAction, QKeySequence
+import json
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -28,6 +29,7 @@ from .review_panel import ReviewPanel
 from video_censor.preferences import ContentFilterSettings, Profile
 from video_censor.profile_manager import ProfileManager
 from video_censor.queue import QueueItem, ProcessingQueue
+from video_censor.detection.serializer import DetectionSerializer, save_detections
 from video_censor.config import Config
 from video_censor.queue import QueueItem, ProcessingQueue
 
@@ -903,24 +905,32 @@ class PreferencePanel(QFrame):
     def _run_sync_thread(self):
         """Worker thread for sync."""
         try:
-            # We need to update config object first since it's passed around
-            # Actually self.config is already updated by _save_settings signals
-            
+            import asyncio
+            from dataclasses import asdict
             from video_censor.profanity.wordlist import sync_custom_wordlist
             from video_censor.presets import sync_presets
+            from video_censor.sync import SyncManager
             
-            # 1. Sync Wordlist
-            w_success = sync_custom_wordlist(self.config)
+            async def run_sync_tasks():
+                # 1. Sync Wordlist
+                w_success = await sync_custom_wordlist(self.config)
+                
+                # 2. Sync Presets
+                p_success = await sync_presets(self.config)
+                
+                # 3. Sync Settings
+                s_success = False
+                if self.config.sync.enabled and self.config.sync.user_id:
+                    mgr = SyncManager(self.config.sync.supabase_url, self.config.sync.supabase_key, self.config.sync.user_id)
+                    s_success = await mgr.push_settings(asdict(self.config))
+                else:
+                    s_success = True
+                    
+                return w_success and p_success and s_success
+
+            success = asyncio.run(run_sync_tasks())
             
-            # 2. Sync Presets
-            p_success = sync_presets(self.config)
-            
-            # Update UI on main thread
-            # Since we are in a QFrame not QMainWindow, we should be careful.
-            # But simple text updates might work or use signals.
-            # Safest is to use QTimer.singleShot(0, lambda: ...)
-            
-            status_msg = "Synced just now" if (w_success and p_success) else "Sync Failed"
+            status_msg = "Synced just now" if success else "Sync Failed"
             
             QTimer.singleShot(0, lambda: self._on_sync_complete(status_msg))
             
@@ -1161,11 +1171,11 @@ class QueuePanel(QFrame):
         """Toggle pause state."""
         self.paused = not self.paused
         if self.paused:
-            self.pause_btn.setText("▶")
+            self.pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
             self.pause_btn.setToolTip("Resume Processing")
-            self.pause_btn.setStyleSheet("background: #2e1f1f; border-radius: 4px; border: 1px solid #382828; color: #ff5555;")
+            self.pause_btn.setStyleSheet("background: #2e1f1f; border-radius: 4px; border: 1px solid #382828;")
         else:
-            self.pause_btn.setText("⏸")
+            self.pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
             self.pause_btn.setToolTip("Pause Processing")
             self.pause_btn.setStyleSheet("background: #1f1f2e; border-radius: 4px; border: 1px solid #282838;")
         
@@ -1202,16 +1212,15 @@ class QueuePanel(QFrame):
         header.addStretch()
         
         # Pause button
-        self.pause_btn = QPushButton("⏸")
+        self.pause_btn = QPushButton()
+        self.pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
         self.pause_btn.setToolTip("Pause Processing")
         self.pause_btn.setFixedSize(32, 28)
         self.pause_btn.setStyleSheet("""
             QPushButton {
                 background: #1f1f2e;
-                color: #a0a0aa;
                 border-radius: 4px;
                 border: 1px solid #282838;
-                font-size: 14px;
             }
             QPushButton:hover {
                 background: #282838;
@@ -1220,19 +1229,21 @@ class QueuePanel(QFrame):
         self.pause_btn.clicked.connect(self._toggle_pause)
         header.addWidget(self.pause_btn)
         
-        # Sleep Toggle Button - compact
-        self.sleep_btn = QPushButton("🌙")
+        # Sleep Toggle Button
+        self.sleep_btn = QPushButton("Auto Sleep")
         self.sleep_btn.setCheckable(True)
-        self.sleep_btn.setToolTip("Auto-Sleep: Put computer to sleep when queue completes")
+        self.sleep_btn.setToolTip("Put computer to sleep when queue completes")
         self.sleep_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.sleep_btn.setFixedSize(32, 28)
+        self.sleep_btn.setFixedWidth(80) # Widen for text
+        self.sleep_btn.setFixedHeight(28)
         self.sleep_btn.setStyleSheet("""
             QPushButton {
                 background: #1f1f2e;
                 color: #71717a;
                 border: 1px solid #282838;
                 border-radius: 4px;
-                font-size: 14px;
+                font-size: 11px;
+                font-weight: bold;
             }
             QPushButton:checked {
                 background: #4c1d95;
@@ -1326,6 +1337,7 @@ class MainWindow(QMainWindow):
         self.processing = False
         self.current_item: Optional[QueueItem] = None
         self.current_process = None # Handle to running subprocess
+        self.detections_modified = False # Track unsaved changes
         
         # Connect signals
         self.progress_update.connect(self.on_progress_update)
@@ -1334,6 +1346,7 @@ class MainWindow(QMainWindow):
         self.item_review_ready.connect(self.on_item_review_ready)
         
         self._create_ui()
+        self._create_menu()
         
         # Connect queue callback for batch notifications
         self.processing_queue.on_complete_callback = self._on_queue_complete
@@ -1354,7 +1367,203 @@ class MainWindow(QMainWindow):
         
         # Check disk space on startup
         self._check_disk_space()
+
+    def _create_menu(self):
+        """Create application menu bar."""
+        menu_bar = self.menuBar()
+        
+        # File Menu
+        file_menu = menu_bar.addMenu("File")
+        
+        # Open
+        file_menu.addAction("Open Video...", self._open_video_dialog, QKeySequence("Ctrl+O"))
+        file_menu.addSeparator()
+        
+        # Import/Load
+        load_action = QAction("Load Detections...", self)
+        load_action.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        load_action.triggered.connect(self._load_detections)
+        file_menu.addAction(load_action)
+        
+        # Save
+        save_action = QAction("Save Detections", self)
+        save_action.setShortcut(QKeySequence("Ctrl+S"))
+        save_action.triggered.connect(self._save_detections)
+        file_menu.addAction(save_action)
+        
+        save_as_action = QAction("Save Detections As...", self)
+        save_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        save_as_action.triggered.connect(self._save_detections_as)
+        file_menu.addAction(save_as_action)
+        
+        file_menu.addSeparator()
+        
+        # Export (Render)
+        render_action = QAction("Quick Re-render...", self)
+        render_action.setShortcut(QKeySequence("Ctrl+R"))
+        render_action.triggered.connect(self._quick_rerender)
+        file_menu.addAction(render_action)
     
+    def _open_video_dialog(self):
+        """Open video dialog wrapping _file_dropped logic."""
+        path, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.mkv *.avi *.mov)")
+        if path:
+            self._file_dropped(path)
+            
+    def _check_saved_detections(self, video_path: str):
+        """Check for auto-saved detections on file open."""
+        if DetectionSerializer.has_saved_detections(video_path):
+            if self.config.detection_cache.auto_load:
+                reply = QMessageBox.question(
+                    self, "Load Detections?",
+                    "Found saved detections for this video.\n\nLoad them to skip analysis?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+                )
+                if reply == QMessageBox.Yes:
+                    self._load_detections_from_path(DetectionSerializer.get_auto_path(video_path))
+                    return True
+        return False
+
+    def _load_detections(self):
+        """Load detections dialog."""
+        if not self.current_item:
+            QMessageBox.warning(self, "No Video", "Please open a video first.")
+            return
+
+        path, _ = QFileDialog.getOpenFileName(self, "Load Detections", 
+            str(self.current_item.input_path.parent) if self.current_item else "", 
+            "Detection Files (*.detections.json);;JSON Files (*.json)")
+        if path:
+            self._load_detections_from_path(path)
+            
+    def _load_detections_from_path(self, path: str):
+        try:
+            # Load via serializer
+            intervals, metadata = DetectionSerializer.load(path, str(self.current_item.input_path) if self.current_item else None)
+            
+            # We need to restructure this into the format ReviewPanel expects { 'profanity': [...], ... }
+            # Since TimeIntervals know their type/reason, we can group them.
+            data = {}
+            for interval in intervals:
+                # determine type from metadata or guess
+                type_ = interval.metadata.get('type', 'unknown')
+                if type_ == 'unknown':
+                     # Fallback guess
+                     if interval.reason in ['profanity', 'bad_word']: type_ = 'profanity'
+                     elif interval.reason in ['nudity', 'exposed_parts']: type_ = 'nudity'
+                
+                # We need to convert back to dict for ReviewPanel? 
+                # ReviewPanel uses dicts internally in detection_browser.
+                # Actually browser uses dicts, but serializer gives TimeIntervals.
+                # Let's check ReviewPanel.load_data. It takes 'data' dict.
+                # And DetectionBrowser expects lists of dicts.
+                
+                # So we must serialize BACK to dict for UI consumption
+                serialized = DetectionSerializer.serialize_interval(interval)
+                # Ensure it has 'label' which UI uses
+                serialized['label'] = serialized.get('reason', '')
+                
+                if type_ not in data: data[type_] = []
+                data[type_].append(serialized)
+            
+            # Load into UI
+            duration = self.current_item.duration if hasattr(self.current_item, 'duration') else 100
+            self.review_panel.load_data(str(self.current_item.input_path), duration, data)
+            self.stack.setCurrentIndex(1)
+            self.status_label.setText(f"Loaded: {Path(path).name}")
+            self.detections_modified = False
+            self._update_title_modified()
+            QMessageBox.information(self, "Loaded", f"Loaded {len(intervals)} detections.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Load Failed", f"Failed to load: {e}")
+
+    def _save_detections(self):
+        """Save current detections."""
+        if not self.current_item: return
+        try:
+            # Extract data from UI
+            data = self.review_panel.get_data()
+            intervals = []
+            for key, items in data.items():
+                for item in items:
+                    data_dict = item.copy()
+                    data_dict['metadata'] = item.get('metadata', {})
+                    data_dict['metadata']['type'] = key # Ensure type persists
+                    intervals.append(DetectionSerializer.deserialize_interval(data_dict))
+            
+            DetectionSerializer.save(self.current_item.input_path, intervals)
+            self.detections_modified = False
+            self._update_title_modified()
+            self.statusBar().showMessage("Detections saved successfully.", 3000)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Failed", f"Failed to save: {e}")
+
+    def _save_detections_as(self):
+        """Save detections to specific file."""
+        if not self.current_item: return
+        path, _ = QFileDialog.getSaveFileName(self, "Save Detections As", 
+            DetectionSerializer.get_auto_path(self.current_item.input_path), 
+            "Detection Files (*.detections.json)")
+        if path:
+            try:
+                data = self.review_panel.get_data()
+                intervals = []
+                for key, items in data.items():
+                    for item in items:
+                        data_dict = item.copy()
+                        data_dict['metadata'] = item.get('metadata', {})
+                        data_dict['metadata']['type'] = key
+                        intervals.append(DetectionSerializer.deserialize_interval(data_dict))
+                
+                DetectionSerializer.save(self.current_item.input_path, intervals, output_path=path)
+                self.detections_modified = False
+                self._update_title_modified()
+                self.statusBar().showMessage(f"Saved to {Path(path).name}", 3000)
+            except Exception as e:
+                QMessageBox.critical(self, "Save Failed", f"Failed to save: {e}")
+
+    def _quick_rerender(self):
+        """Skip analysis and go straight to render."""
+        if not self.current_item: return
+        
+        reply = QMessageBox.question(self, "Quick Re-render", 
+            "Render video using current detections?\n\nThis skips analysis.",
+            QMessageBox.Yes | QMessageBox.Cancel)
+            
+        if reply == QMessageBox.Yes:
+            # Trigger export logic
+            # We need to trick the system into thinking analysis is done?
+            # Or just call _run_censor directly?
+            # _run_censor expects item to have analysis_path.
+            # We should probably save first.
+            if self.detections_modified:
+                 self._save_detections()
+            
+            # Ensure item has analysis path set to current file
+            auto_path = DetectionSerializer.get_auto_path(self.current_item.input_path)
+            self.current_item.analysis_path = Path(auto_path)
+            self.current_item.status = "review_ready" # Force status
+            self.on_export_requested() # Call existing handler
+
+    def _update_title_modified(self):
+        """Update window title with dirty state."""
+        title = "Video Censor"
+        if self.current_item:
+            title += f" - {self.current_item.filename}"
+        if self.detections_modified:
+            title += " *"
+        self.setWindowTitle(title)
+        
+    def _create_ui_placeholder(self):
+        pass # Placeholder for replace target
+
+    def _export_detections(self):
+        pass # Removed invalid legacy method
+    
+    def _import_detections(self):
+        pass # Removed invalid legacy method
+
     def _create_ui(self):
         central = QWidget()
         central.setStyleSheet("background-color: #06060a;")
@@ -1573,6 +1782,7 @@ class MainWindow(QMainWindow):
         
         # Page 1: Review Panel
         self.review_panel = ReviewPanel()
+        self.review_panel.data_changed.connect(self._on_detection_changed)
         self.review_panel.export_requested.connect(self._on_export_confirmed)
         self.review_panel.cancel_requested.connect(self._on_review_cancelled)
         self.review_panel.editor_requested.connect(self._on_editor_requested)
@@ -1679,9 +1889,85 @@ class MainWindow(QMainWindow):
         if file_path:
             self._on_file_dropped(file_path)
     
-    def _on_file_dropped(self, path: str):
-        self.preference_panel.set_video(path)
     
+    def _create_toolbar(self):
+        """Create quick access toolbar."""
+        toolbar = self.addToolBar("Main Toolbar")
+        toolbar.setMovable(False)
+        
+        # Load
+        load_btn = QAction("📂 Load", self)
+        load_btn.setToolTip("Load saved detections (Ctrl+Shift+O)")
+        load_btn.triggered.connect(self._load_detections)
+        toolbar.addAction(load_btn)
+        
+        # Save
+        save_btn = QAction("💾 Save", self)
+        save_btn.setToolTip("Save detections (Ctrl+S)")
+        save_btn.triggered.connect(self._save_detections)
+        toolbar.addAction(save_btn)
+        
+        toolbar.addSeparator()
+        
+        # Re-render
+        rerender_btn = QAction("🔄 Re-render", self)
+        rerender_btn.setToolTip("Quick re-render with current detections (Ctrl+R)")
+        rerender_btn.triggered.connect(self._quick_rerender)
+        toolbar.addAction(rerender_btn)
+
+    def _on_file_dropped(self, path: str):
+        # Create temporary QueueItem to context
+        video_path_obj = Path(path)
+        # Create output path (default)
+        from video_censor.ui.main_window import OUTPUT_DIR # Import if needed or use global
+        output_format = self.format_combo.currentText() if hasattr(self, 'format_combo') else "mp4"
+        output_path = Path(OUTPUT_DIR) / f"{video_path_obj.stem}.CENSORED.{output_format}"
+        
+        # Basic item setup for context
+        self.current_item = QueueItem(
+             input_path=video_path_obj,
+             output_path=output_path,
+             filters=ContentFilterSettings(), # Default
+             status="pending"
+        )
+        
+        if self._check_saved_detections(path):
+            # If loaded successfully, switch to review
+            return
+
+        # Otherwise show preferences
+        self.preference_panel.set_video(path)
+
+    def _on_detection_changed(self):
+        """Called when detection added/removed/edited"""
+        self.detections_modified = True
+        self._update_title_modified()
+    
+    def _create_toolbar(self):
+        """Create quick access toolbar."""
+        toolbar = self.addToolBar("Main Toolbar")
+        toolbar.setMovable(False)
+        
+        # Load
+        load_btn = QAction("📂 Load", self)
+        load_btn.setToolTip("Load saved detections (Ctrl+Shift+O)")
+        load_btn.triggered.connect(self._load_detections)
+        toolbar.addAction(load_btn)
+        
+        # Save
+        save_btn = QAction("💾 Save", self)
+        save_btn.setToolTip("Save detections (Ctrl+S)")
+        save_btn.triggered.connect(self._save_detections)
+        toolbar.addAction(save_btn)
+        
+        toolbar.addSeparator()
+        
+        # Re-render
+        rerender_btn = QAction("🔄 Re-render", self)
+        rerender_btn.setToolTip("Quick re-render with current detections (Ctrl+R)")
+        rerender_btn.triggered.connect(self._quick_rerender)
+        toolbar.addAction(rerender_btn)
+
     def _show_feedback_dialog(self):
         """Show the feedback dialog for rating processed videos."""
         try:
@@ -2350,57 +2636,71 @@ class MainWindow(QMainWindow):
             # Store reference in main window for cancellation
             self.current_process = process
             
-            # Log file for debugging
+            # Log file for debugging - Open ONCE instead of per-line
             debug_log = Path(__file__).parent.parent / "ui_debug.log"
             
+            # Rate limiting for progress updates
+            import time
+            last_progress_emit = 0
+            progress_emit_interval = 0.1 # Max 10 updates per second
+            
             # Read output
-            while True:
-                line = process.stdout.readline()
-                if not line and process.poll() is not None:
-                    break
+            with open(debug_log, "a") as log_file:
+                while True:
+                    line = process.stdout.readline()
+                    if not line and process.poll() is not None:
+                        break
+                        
+                    if not line:
+                        continue
+                        
+                    line = line.strip()
                     
-                if not line:
-                    continue
+                    # Log to file efficiently
+                    log_file.write(f"[PIPE] {line}\n")
+                    # Flush periodically or rely on OS buffering? 
+                    # OS buffering is fine, maybe flush on errors.
                     
-                line = line.strip()
-                
-                # Log to file
-                with open(debug_log, "a") as f:
-                    f.write(f"[PIPE] {line}\n")
-                
-                # Update progress based on step markers
-                # Update progress based on step markers
-                if is_analysis_pass:
-                    # Analysis Phases (0-50%)
-                    if "STEP 1" in line:
-                         self.progress_update.emit(item.id, 0.05, "Starting parallel analysis...")
+                    # Update progress based on step markers
+                    current_time = time.time()
+                    should_emit = (current_time - last_progress_emit) > progress_emit_interval
                     
-                    # Parallel Progress Parsing
-                    elif "[AUDIO] PROGRESS:" in line:
-                        try:
-                            # [AUDIO] PROGRESS: 45% -> Parse percent
-                            pct = int(line.split("PROGRESS:")[1].split("%")[0].strip())
-                            
-                            # Update item with new method
-                            combined = item.update_parallel_progress(audio_pct=pct)
-                            
-                            msg = f"Analyzing: Audio {int(item.audio_progress)}% | Video {int(item.video_progress)}%"
-                            self.progress_update.emit(item.id, combined, msg)
-                        except:
-                            pass
-                            
-                    elif "[VIDEO] PROGRESS:" in line:
-                        try:
-                            # [VIDEO] PROGRESS: 30%
-                            pct = int(line.split("PROGRESS:")[1].split("%")[0].strip())
-                            
-                            # Update item with new method
-                            combined = item.update_parallel_progress(video_pct=pct)
-                            
-                            msg = f"Analyzing: Audio {int(item.audio_progress)}% | Video {int(item.video_progress)}%"
-                            self.progress_update.emit(item.id, combined, msg)
-                        except:
-                            pass
+                    if is_analysis_pass:
+                        # Analysis Phases (0-50%)
+                        if "STEP 1" in line:
+                             self.progress_update.emit(item.id, 0.05, "Starting parallel analysis...")
+                             last_progress_emit = current_time
+                        
+                        # Parallel Progress Parsing
+                        elif "[AUDIO] PROGRESS:" in line:
+                            try:
+                                # [AUDIO] PROGRESS: 45% -> Parse percent
+                                pct = int(line.split("PROGRESS:")[1].split("%")[0].strip())
+                                
+                                # Update item with new method
+                                combined = item.update_parallel_progress(audio_pct=pct)
+                                
+                                if should_emit or pct >= 100:
+                                    msg = f"Analyzing: Audio {int(item.audio_progress)}% | Video {int(item.video_progress)}%"
+                                    self.progress_update.emit(item.id, combined, msg)
+                                    last_progress_emit = current_time
+                            except:
+                                pass
+                                
+                        elif "[VIDEO] PROGRESS:" in line:
+                            try:
+                                # [VIDEO] PROGRESS: 30%
+                                pct = int(line.split("PROGRESS:")[1].split("%")[0].strip())
+                                
+                                # Update item with new method
+                                combined = item.update_parallel_progress(video_pct=pct)
+                                
+                                if should_emit or pct >= 100:
+                                    msg = f"Analyzing: Audio {int(item.audio_progress)}% | Video {int(item.video_progress)}%"
+                                    self.progress_update.emit(item.id, combined, msg)
+                                    last_progress_emit = current_time
+                            except:
+                                pass
                     
                     elif "STEP 2.5" in line:
                          self.progress_update.emit(item.id, 0.50, "Sexual content detection...")

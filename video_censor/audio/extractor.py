@@ -50,6 +50,7 @@ def extract_audio(
     # Build ffmpeg command
     cmd = [
         'ffmpeg',
+        '-nostdin', # Prevent reading from stdin (crucial for background processes)
         '-y',  # Overwrite output
         '-i', str(video_path),
         '-vn',  # No video

@@ -50,6 +50,24 @@ profanity:
   dynamic_buffer: true
   dynamic_buffer_factor: 0.02
   merge_gap: 0.3
+  
+  # Severity Overrides (New)
+  # Customize how specific words are categorized
+  # Available tiers: severe, moderate, mild, religious
+  severity_overrides:
+    "heck": "mild"
+    "darn": "mild"
+    "god": "religious"    # Default
+    "freaking": "mild"
+    
+  # Custom Tiers (Optional - Add your own priority groups)
+  # Tiers are for sorting and grouping only (no auto-skip)
+  # order: Lower number = Higher priority (top of list)
+  custom_tiers:
+    - name: "my_priority"
+      order: 0
+      color: "#FF00FF"
+      words: ["specific", "words", "here"]
 sexual_content:
   buffer_after: 0.25
   buffer_before: 0.25
