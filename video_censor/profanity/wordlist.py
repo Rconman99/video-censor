@@ -72,6 +72,12 @@ PROFANITY_STEMS: Dict[str, List[str]] = {
     "tits": ["tits", "t!ts", "titties", "tatas"],
     "balls": ["balls", "ballz", "nutz", "nuts"],
     "cunt": ["cunt", "c*nt", "c**t", "cnt"],
+    "clit": ["clit", "cl!t", "clitoris"],
+    "penis": ["penis", "p3nis"],
+    "vagina": ["vagina", "vag"],
+    "twat": ["twat", "tw@t"],
+    "pecker": ["pecker"],
+    "puntang": ["puntang", "poontang", "punani"],
     
     # Whore/slut
     "whore": ["whore", "wh0re", "h0", "ho"],
@@ -84,6 +90,16 @@ PROFANITY_STEMS: Dict[str, List[str]] = {
     "faggot": ["faggot", "f@ggot", "f*ggot"],
     "retard": ["retard", "r*tard", "retart"],
     "retarded": ["retarded", "r*tarded"],
+    "spick": ["spick", "spic"],
+    "heimy": ["heimy", "heeb", "hymie"],
+    "dyke": ["dyke", "d*ke"],
+    
+    # Other offensive
+    "turd": ["turd", "t*rd"],
+    "horny": ["horny", "h0rny"],
+    "fugly": ["fugly"],
+    "douche": ["douche", "douchebag", "douche bag", "d-bag"],
+    "wiseass": ["wiseass", "wise ass", "wisea$$"],
 }
 
 
@@ -231,6 +247,24 @@ DEFAULT_PHRASES: List[List[str]] = [
     ["bite", "me"],
     ["eat", "shit"],
     ["go", "screw", "yourself"],
+    
+    # Sexual phrases (from Google Sheets)
+    ["blow", "job"],
+    ["get", "laid"],
+    ["got", "laid"],
+    ["been", "laid"],
+    ["gang", "bang"],
+    ["piece", "of", "ass"],
+    ["hard", "on"],
+    ["up", "yours"],
+    ["give", "a", "damn"],
+    ["nooky"],
+    ["nooner"],
+    
+    # Religious phrases (from Google Sheets)
+    ["by", "god"],
+    ["god", "almighty"],
+    ["god", "blessed"],
 ]
 
 

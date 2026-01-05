@@ -123,9 +123,13 @@ def get_detector() -> NudityDetector:
 
 def analyze_frame(
     frame: FrameInfo,
-    threshold: float = 0.6,
+    threshold: float = 0.75,
     labels: Optional[set] = None,
-    body_parts: Optional[List[str]] = None
+    body_parts: Optional[List[str]] = None,
+    min_box_area_percent: float = 3.0,
+    max_aspect_ratio: float = 4.0,
+    frame_width: int = 1920,
+    frame_height: int = 1080
 ) -> NudityDetection:
     """
     Analyze a single frame for nudity.
@@ -135,6 +139,10 @@ def analyze_frame(
         threshold: Minimum confidence score to consider a detection
         labels: Set of labels to consider as nudity (defaults to DEFINITE_NUDITY_LABELS)
         body_parts: List of specific body parts to detect (empty/None = all exposed parts)
+        min_box_area_percent: Minimum bounding box area as % of frame (filters tiny detections)
+        max_aspect_ratio: Maximum aspect ratio for detections (filters extreme shapes)
+        frame_width: Frame width for area calculations
+        frame_height: Frame height for area calculations
         
     Returns:
         NudityDetection result
@@ -150,7 +158,11 @@ def analyze_frame(
     detector = get_detector()
     detections = detector.detect_frame(frame.path)
     
-    # Filter detections above threshold
+    # Calculate minimum box area threshold
+    frame_area = frame_width * frame_height
+    min_box_area = (min_box_area_percent / 100.0) * frame_area
+    
+    # Filter detections above threshold with box validation
     relevant_detections = []
     labels_found = []
     max_score = 0.0
@@ -158,11 +170,38 @@ def analyze_frame(
     for det in detections:
         label = det.get('class', '')
         score = det.get('score', 0.0)
+        box = det.get('box', [])
         
-        if label in labels and score >= threshold:
-            relevant_detections.append(det)
-            labels_found.append(label)
-            max_score = max(max_score, score)
+        # Basic threshold check
+        if label not in labels or score < threshold:
+            continue
+        
+        # Bounding box size filter (reject tiny detections)
+        if len(box) >= 4:
+            box_width = abs(box[2] - box[0])
+            box_height = abs(box[3] - box[1])
+            box_area = box_width * box_height
+            
+            if box_area < min_box_area:
+                logger.debug(
+                    f"Rejected {label} at {frame.timestamp:.2f}s: "
+                    f"box too small ({box_area:.0f} < {min_box_area:.0f})"
+                )
+                continue
+            
+            # Aspect ratio filter (reject extreme shapes like lines/noise)
+            if box_height > 0:
+                aspect_ratio = max(box_width / box_height, box_height / box_width)
+                if aspect_ratio > max_aspect_ratio:
+                    logger.debug(
+                        f"Rejected {label} at {frame.timestamp:.2f}s: "
+                        f"extreme aspect ratio ({aspect_ratio:.1f} > {max_aspect_ratio})"
+                    )
+                    continue
+        
+        relevant_detections.append(det)
+        labels_found.append(label)
+        max_score = max(max_score, score)
     
     is_nude = len(relevant_detections) > 0
     
@@ -177,11 +216,13 @@ def analyze_frame(
 
 def detect_nudity(
     frames: List[FrameInfo],
-    threshold: float = 0.6,
+    threshold: float = 0.75,
     frame_interval: float = 0.25,
     min_segment_duration: float = 0.5,
     body_parts: Optional[List[str]] = None,
     min_cut_duration: float = 0.3,
+    min_box_area_percent: float = 3.0,
+    max_aspect_ratio: float = 4.0,
     show_progress: bool = True
 ) -> List[TimeInterval]:
     """
@@ -194,6 +235,8 @@ def detect_nudity(
         min_segment_duration: Minimum duration to create a segment
         body_parts: List of specific body parts to detect (empty = all exposed parts)
         min_cut_duration: Minimum duration for a cut (prevents micro-cuts)
+        min_box_area_percent: Minimum bounding box area as % of frame
+        max_aspect_ratio: Maximum allowed aspect ratio for detections
         show_progress: Whether to show progress bar
         
     Returns:
@@ -208,6 +251,8 @@ def detect_nudity(
     else:
         logger.info(f"Analyzing {len(frames)} frames for nudity (threshold={threshold}, all exposed body parts)")
     
+    logger.info(f"Box filters: min_area={min_box_area_percent}%, max_aspect_ratio={max_aspect_ratio}")
+    
     # Analyze all frames
     nudity_frames: List[FrameInfo] = []
     nudity_results: Dict[int, NudityDetection] = {}
@@ -215,7 +260,13 @@ def detect_nudity(
     frame_iter = tqdm(frames, desc="Analyzing frames", disable=not show_progress)
     
     for frame in frame_iter:
-        result = analyze_frame(frame, threshold, body_parts=body_parts)
+        result = analyze_frame(
+            frame, 
+            threshold, 
+            body_parts=body_parts,
+            min_box_area_percent=min_box_area_percent,
+            max_aspect_ratio=max_aspect_ratio
+        )
         
         if result.is_nude:
             nudity_frames.append(frame)

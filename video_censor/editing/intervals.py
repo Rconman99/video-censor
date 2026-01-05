@@ -3,9 +3,13 @@ Interval merging utilities.
 
 Provides functions to merge overlapping or nearby time intervals.
 This is critical to prevent stuttering playback from many small edits.
+
+Also includes EditDecision for non-destructive timeline editing.
 """
 
 import logging
+import time as time_module
+import uuid
 from dataclasses import dataclass
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -31,6 +35,90 @@ class MatchSource(str, Enum):
     MANUAL = "manual"    # User manually added
     UNKNOWN = "unknown"
 
+
+@dataclass
+class EditDecision:
+    """
+    A single non-destructive edit decision for the timeline editor.
+    
+    Supports frame-accurate editing with both source and output time mapping.
+    Designed for undo/redo support with unique IDs and timestamps.
+    """
+    # Unique identifier for undo/redo tracking
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    
+    # Source video timing (original video)
+    source_start: float = 0.0          # Original video time in seconds
+    source_end: float = 0.0
+    source_start_frame: int = -1       # Frame index for accuracy (-1 = not computed)
+    source_end_frame: int = -1
+    
+    # Edit action
+    action: Action = Action.CUT
+    reason: str = ""
+    
+    # Output timing (computed with ripple mode)
+    output_start: float = 0.0          # Output timeline time
+    output_end: float = 0.0
+    
+    # Metadata
+    created_at: float = field(default_factory=time_module.time)
+    is_provisional: bool = False       # True while user is dragging
+    detection_id: str = ""             # Link to original detection if derived
+    
+    @property
+    def duration(self) -> float:
+        return self.source_end - self.source_start
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary for JSON persistence."""
+        return {
+            'id': self.id,
+            'source_start': self.source_start,
+            'source_end': self.source_end,
+            'source_start_frame': self.source_start_frame,
+            'source_end_frame': self.source_end_frame,
+            'action': self.action.value,
+            'reason': self.reason,
+            'output_start': self.output_start,
+            'output_end': self.output_end,
+            'created_at': self.created_at,
+            'is_provisional': self.is_provisional,
+            'detection_id': self.detection_id,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "EditDecision":
+        """Deserialize from dictionary."""
+        return cls(
+            id=data.get('id', str(uuid.uuid4())),
+            source_start=data.get('source_start', 0.0),
+            source_end=data.get('source_end', 0.0),
+            source_start_frame=data.get('source_start_frame', -1),
+            source_end_frame=data.get('source_end_frame', -1),
+            action=Action(data.get('action', 'cut')),
+            reason=data.get('reason', ''),
+            output_start=data.get('output_start', 0.0),
+            output_end=data.get('output_end', 0.0),
+            created_at=data.get('created_at', time_module.time()),
+            is_provisional=data.get('is_provisional', False),
+            detection_id=data.get('detection_id', ''),
+        )
+    
+    def to_time_interval(self) -> "TimeInterval":
+        """Convert to TimeInterval for export compatibility."""
+        return TimeInterval(
+            start=self.source_start,
+            end=self.source_end,
+            reason=self.reason,
+            action=self.action,
+            source=MatchSource.MANUAL,
+            metadata={
+                'edit_id': self.id,
+                'frame_start': self.source_start_frame,
+                'frame_end': self.source_end_frame,
+            }
+        )
 
 
 @dataclass
@@ -91,6 +179,84 @@ class TimeInterval:
     def contains(self, time: float) -> bool:
         """Check if a time point falls within this interval."""
         return self.start <= time <= self.end
+
+
+@dataclass
+class Scene:
+    """A group of related detections forming a scene for easier review."""
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    start: float = 0.0
+    end: float = 0.0
+    detections: List[TimeInterval] = field(default_factory=list)
+    
+    @property
+    def duration(self) -> float:
+        return self.end - self.start
+    
+    @property
+    def thumbnail_time(self) -> float:
+        """Middle of scene for preview thumbnail."""
+        return (self.start + self.end) / 2
+    
+    @property
+    def detection_count(self) -> int:
+        return len(self.detections)
+    
+    def __repr__(self) -> str:
+        return f"Scene({self.start:.2f}-{self.end:.2f}s, {self.detection_count} detections)"
+
+
+def group_into_scenes(
+    intervals: List[TimeInterval],
+    scene_gap: float = 5.0
+) -> List[Scene]:
+    """
+    Group nearby detections into scenes for easier review.
+    
+    This creates a GoPro-style scene view where the user can delete
+    entire scenes instead of individual micro-segments.
+    
+    Args:
+        intervals: List of TimeInterval detections
+        scene_gap: Maximum gap (seconds) between detections to group as one scene
+        
+    Returns:
+        List of Scene objects, each containing grouped detections
+    """
+    if not intervals:
+        return []
+    
+    # Sort by start time
+    sorted_intervals = sorted(intervals, key=lambda x: x.start)
+    
+    scenes: List[Scene] = []
+    current_scene = Scene(
+        start=sorted_intervals[0].start,
+        end=sorted_intervals[0].end,
+        detections=[sorted_intervals[0]]
+    )
+    
+    for interval in sorted_intervals[1:]:
+        # Check if this interval is within scene_gap of the current scene
+        if interval.start <= current_scene.end + scene_gap:
+            # Extend scene to include this detection
+            current_scene.end = max(current_scene.end, interval.end)
+            current_scene.detections.append(interval)
+        else:
+            # Start a new scene
+            scenes.append(current_scene)
+            current_scene = Scene(
+                start=interval.start,
+                end=interval.end,
+                detections=[interval]
+            )
+    
+    # Don't forget the last scene
+    scenes.append(current_scene)
+    
+    logger.info(f"Grouped {len(intervals)} detections into {len(scenes)} scenes (gap={scene_gap}s)")
+    
+    return scenes
 
 
 def merge_intervals(

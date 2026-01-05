@@ -2,15 +2,23 @@
 Detection Browser Panel for Video Censor.
 Provides an easy sequential workflow for reviewing detected content segments.
 Now with To Review, Kept, and Deleted sections for proper checklist functionality.
+Supports batch selection with checkboxes for mass delete/keep operations.
 """
 
 from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame,
-    QTabBar, QStackedWidget, QSizePolicy, QScrollArea, QSpacerItem
+    QTabBar, QStackedWidget, QSizePolicy, QScrollArea, QSpacerItem, QCheckBox, QSlider
 )
 from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPixmap, QImage, QFont
+
+# Import scene grouping utility
+try:
+    from video_censor.editing.intervals import group_into_scenes, Scene, TimeInterval
+    HAS_SCENE_GROUPING = True
+except ImportError:
+    HAS_SCENE_GROUPING = False
 
 
 class MiniDetectionCard(QFrame):
@@ -100,18 +108,208 @@ class MiniDetectionCard(QFrame):
         return f"{m}:{s:02d}"
 
 
+class SceneCard(QFrame):
+    """A card displaying a scene (group of detections) with expand/collapse."""
+    
+    keep_clicked = Signal(object)  # Emits scene
+    delete_clicked = Signal(object)  # Emits scene
+    card_clicked = Signal(object)  # For seeking to scene start
+    selection_changed = Signal(object, bool)  # (scene, is_selected)
+    
+    def __init__(self, scene, index: int, total: int, parent=None):
+        super().__init__(parent)
+        self.scene = scene
+        self.index = index
+        self.total = total
+        self._is_selected = False
+        self._is_expanded = False
+        
+        self.setProperty("class", "scene-card")
+        self.setStyleSheet("""
+            QFrame[class="scene-card"] {
+                background: #1a1a24;
+                border: 2px solid #8b5cf6;
+                border-radius: 10px;
+                padding: 12px;
+            }
+            QFrame[class="scene-card"]:hover {
+                border-color: #a78bfa;
+                background: #1f1f2a;
+            }
+        """)
+        self.setCursor(Qt.PointingHandCursor)
+        
+        self._create_ui()
+        
+    def _create_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.setContentsMargins(12, 10, 12, 10)
+        
+        # Header with checkbox, scene icon, and time range
+        header = QHBoxLayout()
+        
+        # Selection checkbox
+        self.checkbox = QCheckBox()
+        self.checkbox.setStyleSheet("""
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 2px solid #8b5cf6;
+                background: #1a1a24;
+            }
+            QCheckBox::indicator:checked {
+                background: #8b5cf6;
+                border-color: #8b5cf6;
+            }
+        """)
+        self.checkbox.stateChanged.connect(self._on_checkbox_changed)
+        header.addWidget(self.checkbox)
+        
+        # Scene icon and number
+        scene_label = QLabel(f"🎬 Scene {self.index + 1} of {self.total}")
+        scene_label.setStyleSheet("color: #a78bfa; font-size: 12px; font-weight: 700;")
+        header.addWidget(scene_label)
+        
+        header.addStretch()
+        
+        # Time range
+        start = self._format_time(self.scene.start)
+        end = self._format_time(self.scene.end)
+        duration = self.scene.duration
+        time_label = QLabel(f"⏱ {start} → {end} ({duration:.1f}s)")
+        time_label.setStyleSheet("color: #8b5cf6; font-size: 11px; font-weight: 600;")
+        header.addWidget(time_label)
+        
+        layout.addLayout(header)
+        
+        # Detection count info
+        count_label = QLabel(f"Contains {self.scene.detection_count} detection{'s' if self.scene.detection_count != 1 else ''}")
+        count_label.setStyleSheet("color: #a0a0b0; font-size: 11px;")
+        layout.addWidget(count_label)
+        
+        # Expand/collapse button and detections container
+        self.expand_btn = QPushButton("▶ Show detections")
+        self.expand_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #71717a;
+                border: none;
+                text-align: left;
+                padding: 4px 0;
+                font-size: 10px;
+            }
+            QPushButton:hover {
+                color: #a0a0b0;
+            }
+        """)
+        self.expand_btn.clicked.connect(self._toggle_expand)
+        layout.addWidget(self.expand_btn)
+        
+        # Detections container (hidden by default)
+        self.detections_container = QWidget()
+        self.detections_layout = QVBoxLayout(self.detections_container)
+        self.detections_layout.setSpacing(4)
+        self.detections_layout.setContentsMargins(8, 4, 0, 4)
+        self.detections_container.setVisible(False)
+        
+        # Populate with detection mini-cards
+        for det in self.scene.detections:
+            det_info = QLabel(f"• {self._format_time(det.start)} - {self._format_time(det.end)}: {det.reason[:40]}")
+            det_info.setStyleSheet("color: #71717a; font-size: 10px;")
+            self.detections_layout.addWidget(det_info)
+        
+        layout.addWidget(self.detections_container)
+        
+        # Action buttons
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        
+        self.keep_btn = QPushButton("✓ Keep Scene")
+        self.keep_btn.setStyleSheet("""
+            QPushButton {
+                background: #22c55e;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 20px;
+                font-weight: 600;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: #16a34a;
+            }
+        """)
+        self.keep_btn.clicked.connect(lambda: self.keep_clicked.emit(self.scene))
+        actions.addWidget(self.keep_btn)
+        
+        self.delete_btn = QPushButton("✗ Delete Scene")
+        self.delete_btn.setStyleSheet("""
+            QPushButton {
+                background: #ef4444;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 20px;
+                font-weight: 600;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: #dc2626;
+            }
+        """)
+        self.delete_btn.clicked.connect(lambda: self.delete_clicked.emit(self.scene))
+        actions.addWidget(self.delete_btn)
+        
+        layout.addLayout(actions)
+        
+    def _toggle_expand(self):
+        self._is_expanded = not self._is_expanded
+        self.detections_container.setVisible(self._is_expanded)
+        self.expand_btn.setText("▼ Hide detections" if self._is_expanded else "▶ Show detections")
+        
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            # Create a segment-like dict for seeking
+            self.card_clicked.emit({'start': self.scene.start, 'end': self.scene.end})
+        super().mousePressEvent(event)
+        
+    def _format_time(self, seconds: float) -> str:
+        m, s = divmod(int(seconds), 60)
+        h, m = divmod(m, 60)
+        if h > 0:
+            return f"{h}:{m:02d}:{s:02d}"
+        return f"{m}:{s:02d}"
+    
+    def _on_checkbox_changed(self, state):
+        self._is_selected = state == Qt.Checked
+        self.selection_changed.emit(self.scene, self._is_selected)
+        
+    def set_selected(self, selected: bool):
+        self._is_selected = selected
+        self.checkbox.blockSignals(True)
+        self.checkbox.setChecked(selected)
+        self.checkbox.blockSignals(False)
+        
+    def is_selected(self) -> bool:
+        return self._is_selected
+
+
 class DetectionCard(QFrame):
-    """A card displaying a single detection with actions."""
+    """A card displaying a single detection with actions and selection checkbox."""
     
     keep_clicked = Signal(object)  # Emits segment
     delete_clicked = Signal(object)  # Emits segment
     card_clicked = Signal(object)  # For seeking to segment
+    selection_changed = Signal(object, bool)  # (segment, is_selected)
     
     def __init__(self, segment: dict, index: int, total: int, parent=None):
         super().__init__(parent)
         self.segment = segment
         self.index = index
         self.total = total
+        self._is_selected = False
         
         self.setProperty("class", "detection-card")
         self.setStyleSheet("""
@@ -135,8 +333,32 @@ class DetectionCard(QFrame):
         layout.setSpacing(8)
         layout.setContentsMargins(12, 10, 12, 10)
         
-        # Header with counter and time
+        # Header with checkbox, counter and time
         header = QHBoxLayout()
+        
+        # Selection checkbox
+        self.checkbox = QCheckBox()
+        self.checkbox.setStyleSheet("""
+            QCheckBox {
+                spacing: 4px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 2px solid #3a3a48;
+                background: #1a1a24;
+            }
+            QCheckBox::indicator:checked {
+                background: #3b82f6;
+                border-color: #3b82f6;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #3b82f6;
+            }
+        """)
+        self.checkbox.stateChanged.connect(self._on_checkbox_changed)
+        header.addWidget(self.checkbox)
         
         counter = QLabel(f"#{self.index + 1} of {self.total}")
         counter.setStyleSheet("color: #71717a; font-size: 11px; font-weight: 600;")
@@ -257,6 +479,22 @@ class DetectionCard(QFrame):
                     background: #1f1f2a;
                 }
             """)
+    
+    def _on_checkbox_changed(self, state):
+        """Handle checkbox state change."""
+        self._is_selected = state == Qt.Checked
+        self.selection_changed.emit(self.segment, self._is_selected)
+        
+    def set_selected(self, selected: bool):
+        """Programmatically set the selection state."""
+        self._is_selected = selected
+        self.checkbox.blockSignals(True)
+        self.checkbox.setChecked(selected)
+        self.checkbox.blockSignals(False)
+        
+    def is_selected(self) -> bool:
+        """Return current selection state."""
+        return self._is_selected
 
 
 class CollapsibleSection(QFrame):
@@ -334,6 +572,7 @@ class DetectionBrowserPanel(QFrame):
     """
     Panel for browsing and reviewing detected content segments.
     Provides tabbed navigation by type with To Review, Kept, and Deleted sections.
+    Supports batch selection with checkboxes for mass delete/keep operations.
     """
     
     segment_deleted = Signal(str, object)  # (track_key, segment)
@@ -354,6 +593,10 @@ class DetectionBrowserPanel(QFrame):
         self.current_track = None
         self.current_index = 0
         self.cards = []  # Current review card widgets
+        self.selected_segments = set()  # Track selected segment IDs
+        self.scene_mode = False  # Scene grouping mode
+        self.scene_gap = 5.0  # Default scene gap in seconds
+        self.scenes = []  # Grouped scenes for current track
         
         self._create_ui()
         
@@ -401,6 +644,60 @@ class DetectionBrowserPanel(QFrame):
         self.progress_summary = QLabel()
         self.progress_summary.setStyleSheet("color: #71717a; font-size: 11px; padding: 4px 0;")
         layout.addWidget(self.progress_summary)
+        
+        # Selection toolbar
+        selection_bar = QHBoxLayout()
+        selection_bar.setSpacing(8)
+        
+        self.select_all_btn = QPushButton("☐ Select All")
+        self.select_all_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #3b82f6;
+                border: 1px solid #3b82f6;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-weight: 600;
+                font-size: 10px;
+            }
+            QPushButton:hover {
+                background: rgba(59, 130, 246, 0.1);
+            }
+        """)
+        self.select_all_btn.clicked.connect(self._toggle_select_all)
+        selection_bar.addWidget(self.select_all_btn)
+        
+        self.selection_label = QLabel("0 selected")
+        self.selection_label.setStyleSheet("color: #71717a; font-size: 10px;")
+        selection_bar.addWidget(self.selection_label)
+        
+        selection_bar.addStretch()
+        
+        # Scene grouping toggle (only for nudity)
+        self.scene_toggle = QCheckBox("🎬 Group Scenes")
+        self.scene_toggle.setToolTip("Group nearby detections into scenes for easier review")
+        self.scene_toggle.setStyleSheet("""
+            QCheckBox {
+                color: #8b5cf6;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border-radius: 3px;
+                border: 2px solid #8b5cf6;
+                background: #1a1a24;
+            }
+            QCheckBox::indicator:checked {
+                background: #8b5cf6;
+            }
+        """)
+        self.scene_toggle.setVisible(False)  # Only shown for nudity
+        self.scene_toggle.stateChanged.connect(self._on_scene_toggle)
+        selection_bar.addWidget(self.scene_toggle)
+        
+        layout.addLayout(selection_bar)
         
         # Scroll area for all content
         scroll = QScrollArea()
@@ -460,47 +757,100 @@ class DetectionBrowserPanel(QFrame):
         scroll.setWidget(self.content_widget)
         layout.addWidget(scroll, 1)
         
-        # Quick actions footer
-        quick = QHBoxLayout()
-        quick.setSpacing(8)
+        # Batch action buttons (for selected items)
+        batch_actions = QHBoxLayout()
+        batch_actions.setSpacing(8)
         
-        self.keep_all_btn = QPushButton("Keep All Remaining")
+        self.keep_selected_btn = QPushButton("✓ Keep Selected")
+        self.keep_selected_btn.setEnabled(False)
+        self.keep_selected_btn.setStyleSheet("""
+            QPushButton {
+                background: #22c55e;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: #16a34a;
+            }
+            QPushButton:disabled {
+                background: #1a2e1a;
+                color: #4a5a4a;
+            }
+        """)
+        self.keep_selected_btn.clicked.connect(self._keep_selected)
+        batch_actions.addWidget(self.keep_selected_btn)
+        
+        self.delete_selected_btn = QPushButton("✗ Delete Selected")
+        self.delete_selected_btn.setEnabled(False)
+        self.delete_selected_btn.setStyleSheet("""
+            QPushButton {
+                background: #ef4444;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 12px;
+                font-weight: 600;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background: #dc2626;
+            }
+            QPushButton:disabled {
+                background: #2e1a1a;
+                color: #5a4a4a;
+            }
+        """)
+        self.delete_selected_btn.clicked.connect(self._delete_selected)
+        batch_actions.addWidget(self.delete_selected_btn)
+        
+        layout.addLayout(batch_actions)
+        
+        # Quick all actions row (smaller, secondary)
+        quick_all = QHBoxLayout()
+        quick_all.setSpacing(8)
+        
+        self.keep_all_btn = QPushButton("Keep All")
         self.keep_all_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;
                 color: #22c55e;
-                border: 1px solid #22c55e;
-                border-radius: 6px;
-                padding: 8px 12px;
-                font-weight: 600;
-                font-size: 11px;
+                border: none;
+                padding: 4px 8px;
+                font-size: 10px;
             }
             QPushButton:hover {
-                background: rgba(34, 197, 94, 0.1);
+                text-decoration: underline;
             }
         """)
         self.keep_all_btn.clicked.connect(self._keep_all)
-        quick.addWidget(self.keep_all_btn)
+        quick_all.addWidget(self.keep_all_btn)
         
-        self.delete_all_btn = QPushButton("Delete All Remaining")
+        separator = QLabel("|")
+        separator.setStyleSheet("color: #3a3a48; font-size: 10px;")
+        quick_all.addWidget(separator)
+        
+        self.delete_all_btn = QPushButton("Delete All")
         self.delete_all_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;
                 color: #ef4444;
-                border: 1px solid #ef4444;
-                border-radius: 6px;
-                padding: 8px 12px;
-                font-weight: 600;
-                font-size: 11px;
+                border: none;
+                padding: 4px 8px;
+                font-size: 10px;
             }
             QPushButton:hover {
-                background: rgba(239, 68, 68, 0.1);
+                text-decoration: underline;
             }
         """)
         self.delete_all_btn.clicked.connect(self._delete_all)
-        quick.addWidget(self.delete_all_btn)
+        quick_all.addWidget(self.delete_all_btn)
         
-        layout.addLayout(quick)
+        quick_all.addStretch()
+        layout.addLayout(quick_all)
         
     def set_data(self, data: dict):
         """Load detection data. Expected format: {track_key: [segments]}"""
@@ -543,11 +893,23 @@ class DetectionBrowserPanel(QFrame):
             
         self.current_track = self.tab_bar.tabData(index)
         self.current_index = 0
+        
+        # Show scene toggle only for nudity track
+        is_nudity = self.current_track == 'nudity'
+        self.scene_toggle.setVisible(is_nudity and HAS_SCENE_GROUPING)
+        
+        # Reset scene mode if switching away from nudity
+        if not is_nudity:
+            self.scene_mode = False
+            self.scene_toggle.setChecked(False)
+        
         self._refresh_all_sections()
         
     def _refresh_all_sections(self):
         """Rebuild all sections for current track."""
         self._clear_all()
+        self.selected_segments.clear()  # Reset selection
+        self._update_selection_ui()
         
         if not self.current_track:
             return
@@ -567,17 +929,11 @@ class DetectionBrowserPanel(QFrame):
         
         # Build To Review section
         if to_review:
-            for i, segment in enumerate(to_review):
-                card = DetectionCard(segment, i, len(to_review))
-                card.keep_clicked.connect(self._on_keep)
-                card.delete_clicked.connect(self._on_delete)
-                card.card_clicked.connect(self._on_card_clicked)
-                self.review_layout.addWidget(card)
-                self.cards.append(card)
-                
-            # Highlight first card
-            if self.cards:
-                self.cards[0].set_highlighted(True)
+            # Check if we should group into scenes (only for nudity)
+            if self.scene_mode and self.current_track == 'nudity' and HAS_SCENE_GROUPING:
+                self._build_scene_cards(to_review)
+            else:
+                self._build_detection_cards(to_review)
         else:
             done_label = QLabel("✅ All reviewed!")
             done_label.setStyleSheet("color: #22c55e; font-size: 12px; padding: 12px; text-align: center;")
@@ -601,7 +957,104 @@ class DetectionBrowserPanel(QFrame):
             mini_card.restore_clicked.connect(lambda seg: self._restore_segment(seg, 'deleted'))
             mini_card.card_clicked.connect(self._on_card_clicked)
             self.deleted_section.add_widget(mini_card)
+    
+    def _build_detection_cards(self, to_review: list):
+        """Build individual detection cards (normal mode)."""
+        for i, segment in enumerate(to_review):
+            card = DetectionCard(segment, i, len(to_review))
+            card.keep_clicked.connect(self._on_keep)
+            card.delete_clicked.connect(self._on_delete)
+            card.card_clicked.connect(self._on_card_clicked)
+            card.selection_changed.connect(self._on_selection_changed)
+            self.review_layout.addWidget(card)
+            self.cards.append(card)
             
+        # Highlight first card
+        if self.cards:
+            self.cards[0].set_highlighted(True)
+    
+    def _build_scene_cards(self, to_review: list):
+        """Build scene cards (grouped mode) for nudity."""
+        # Convert segments to TimeIntervals for grouping
+        intervals = []
+        for seg in to_review:
+            ti = TimeInterval(
+                start=seg.get('start', 0),
+                end=seg.get('end', 0),
+                reason=seg.get('label', seg.get('reason', 'nudity')),
+            )
+            # Store reference to original segment
+            ti.metadata['segment'] = seg
+            intervals.append(ti)
+        
+        # Group into scenes
+        self.scenes = group_into_scenes(intervals, scene_gap=self.scene_gap)
+        
+        # Create scene cards
+        for i, scene in enumerate(self.scenes):
+            card = SceneCard(scene, i, len(self.scenes))
+            card.keep_clicked.connect(self._on_scene_keep)
+            card.delete_clicked.connect(self._on_scene_delete)
+            card.card_clicked.connect(self._on_card_clicked)
+            card.selection_changed.connect(self._on_scene_selection_changed)
+            self.review_layout.addWidget(card)
+            self.cards.append(card)
+    
+    def _on_scene_toggle(self, state):
+        """Handle scene grouping toggle."""
+        self.scene_mode = state == Qt.Checked
+        self._refresh_all_sections()
+    
+    def _on_scene_keep(self, scene):
+        """Keep all detections in a scene."""
+        to_review = self.data.get(self.current_track, [])
+        kept = self.kept.get(self.current_track, [])
+        
+        # Keep all segments within this scene
+        for detection in scene.detections:
+            seg = detection.metadata.get('segment')
+            if seg and seg in to_review:
+                to_review.remove(seg)
+                seg['ignored'] = True
+                kept.append(seg)
+                self.segment_kept.emit(self.current_track, seg)
+        
+        self._update_tab_counts()
+        self._refresh_all_sections()
+        
+        # Seek to next scene if available
+        if to_review:
+            self.seek_to_segment.emit(to_review[0])
+    
+    def _on_scene_delete(self, scene):
+        """Delete all detections in a scene."""
+        to_review = self.data.get(self.current_track, [])
+        deleted = self.deleted.get(self.current_track, [])
+        
+        # Delete all segments within this scene
+        for detection in scene.detections:
+            seg = detection.metadata.get('segment')
+            if seg and seg in to_review:
+                to_review.remove(seg)
+                deleted.append(seg)
+                self.segment_deleted.emit(self.current_track, seg)
+        
+        self._update_tab_counts()
+        self._refresh_all_sections()
+        
+        # Seek to next scene if available
+        if to_review:
+            self.seek_to_segment.emit(to_review[0])
+    
+    def _on_scene_selection_changed(self, scene, is_selected: bool):
+        """Handle scene selection change."""
+        scene_id = id(scene)
+        if is_selected:
+            self.selected_segments.add(scene_id)
+        else:
+            self.selected_segments.discard(scene_id)
+        self._update_selection_ui()
+    
     def _clear_all(self):
         """Clear all card widgets."""
         for card in self.cards:
@@ -713,6 +1166,98 @@ class DetectionBrowserPanel(QFrame):
             deleted.append(segment)
             self.segment_deleted.emit(self.current_track, segment)
         to_review.clear()
+        
+        self._update_tab_counts()
+        self._refresh_all_sections()
+    
+    # ===== SELECTION HANDLING =====
+    
+    def _on_selection_changed(self, segment, is_selected: bool):
+        """Handle selection change from a card."""
+        seg_id = id(segment)
+        if is_selected:
+            self.selected_segments.add(seg_id)
+        else:
+            self.selected_segments.discard(seg_id)
+        self._update_selection_ui()
+        
+    def _update_selection_ui(self):
+        """Update selection-related UI elements."""
+        count = len(self.selected_segments)
+        total = len(self.cards)
+        
+        # Update selection label
+        self.selection_label.setText(f"{count} selected")
+        
+        # Update Select All button text
+        if count == total and total > 0:
+            self.select_all_btn.setText("☑ Deselect All")
+        else:
+            self.select_all_btn.setText("☐ Select All")
+        
+        # Enable/disable batch action buttons
+        has_selection = count > 0
+        self.keep_selected_btn.setEnabled(has_selection)
+        self.delete_selected_btn.setEnabled(has_selection)
+        
+        # Update button text with count
+        if has_selection:
+            self.keep_selected_btn.setText(f"✓ Keep Selected ({count})")
+            self.delete_selected_btn.setText(f"✗ Delete Selected ({count})")
+        else:
+            self.keep_selected_btn.setText("✓ Keep Selected")
+            self.delete_selected_btn.setText("✗ Delete Selected")
+    
+    def _toggle_select_all(self):
+        """Toggle select all / deselect all."""
+        if len(self.selected_segments) == len(self.cards) and len(self.cards) > 0:
+            # Deselect all
+            self.selected_segments.clear()
+            for card in self.cards:
+                card.set_selected(False)
+        else:
+            # Select all
+            self.selected_segments.clear()
+            for card in self.cards:
+                card.set_selected(True)
+                self.selected_segments.add(id(card.segment))
+        self._update_selection_ui()
+    
+    def _keep_selected(self):
+        """Keep all selected items."""
+        to_review = self.data.get(self.current_track, [])
+        kept = self.kept.get(self.current_track, [])
+        
+        segments_to_keep = []
+        for card in self.cards:
+            if id(card.segment) in self.selected_segments:
+                segments_to_keep.append(card.segment)
+        
+        for segment in segments_to_keep:
+            if segment in to_review:
+                to_review.remove(segment)
+                segment['ignored'] = True
+                kept.append(segment)
+                self.segment_kept.emit(self.current_track, segment)
+        
+        self._update_tab_counts()
+        self._refresh_all_sections()
+    
+    def _delete_selected(self):
+        """Delete all selected items."""
+        to_review = self.data.get(self.current_track, [])
+        deleted = self.deleted.get(self.current_track, [])
+        
+        segments_to_delete = []
+        for card in self.cards:
+            if id(card.segment) in self.selected_segments:
+                segments_to_delete.append(card.segment)
+        
+        for segment in segments_to_delete:
+            if segment in to_review:
+                to_review.remove(segment)
+                deleted.append(segment)
+                self.segment_deleted.emit(self.current_track, segment)
         
         self._update_tab_counts()
         self._refresh_all_sections()

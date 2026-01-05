@@ -21,6 +21,7 @@ class ReviewPanel(QFrame):
     
     export_requested = Signal()  # Emitted when user clicks Export
     cancel_requested = Signal()  # Emitted when user clicks Cancel
+    editor_requested = Signal()  # Emitted when user clicks Open Editor
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -179,6 +180,27 @@ class ReviewPanel(QFrame):
         self.cancel_btn.clicked.connect(self._on_cancel_click)
         actions.addWidget(self.cancel_btn)
         
+        # Open Editor button
+        self.editor_btn = QPushButton("✂️ Open Editor")
+        self.editor_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #3b82f6, stop:1 #2563eb);
+                font-weight: 600;
+                padding: 12px 24px;
+                border: none;
+                border-radius: 6px;
+                color: white;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #60a5fa, stop:1 #3b82f6);
+            }
+        """)
+        self.editor_btn.clicked.connect(self._on_editor_click)
+        actions.addWidget(self.editor_btn)
+        
         self.export_btn = QPushButton("▶ Export Censored Video")
         self.export_btn.setProperty("class", "primary")
         self.export_btn.setStyleSheet("""
@@ -287,6 +309,11 @@ class ReviewPanel(QFrame):
         """Handle cancel button click - stop video first."""
         self.stop_playback()
         self.cancel_requested.emit()
+    
+    def _on_editor_click(self):
+        """Handle editor button click - open timeline editor."""
+        self.stop_playback()
+        self.editor_requested.emit()
         
     def get_data(self) -> dict:
         """Get the current edit state (with deleted segments removed, kept segments marked as ignored)."""

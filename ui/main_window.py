@@ -1367,7 +1367,15 @@ class MainWindow(QMainWindow):
         self.review_panel = ReviewPanel()
         self.review_panel.export_requested.connect(self._on_export_confirmed)
         self.review_panel.cancel_requested.connect(self._on_review_cancelled)
+        self.review_panel.editor_requested.connect(self._on_editor_requested)
         self.stack.addWidget(self.review_panel)
+        
+        # Page 2: Editor Panel
+        from .editor_panel import EditorPanel
+        self.editor_panel = EditorPanel()
+        self.editor_panel.export_requested.connect(self._on_editor_export)
+        self.editor_panel.close_requested.connect(self._on_editor_closed)
+        self.stack.addWidget(self.editor_panel)
         
         content.addWidget(self.stack, 1)
         
@@ -1702,6 +1710,95 @@ class MainWindow(QMainWindow):
         
         # Process next
         QTimer.singleShot(100, self._process_next)
+    
+    def _on_editor_requested(self):
+        """User wants to open the Timeline Editor."""
+        if not self.current_item:
+            return
+            
+        item = self.current_item
+        
+        # Load analysis data for editor
+        try:
+            import json
+            with open(item.analysis_path, 'r') as f:
+                data = json.load(f)
+            
+            # Estimate duration
+            duration = 0
+            for type_list in data.values():
+                for seg in type_list:
+                    duration = max(duration, seg.get('end', 0))
+            duration = max(duration, 100)
+            
+            # Load into editor panel
+            from pathlib import Path
+            self.editor_panel.load_video(Path(item.input_path), data, duration)
+            self.stack.setCurrentIndex(2)  # Switch to editor
+            self.status_label.setText("✂️ Editing...")
+            
+        except Exception as e:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", f"Failed to open editor: {e}")
+    
+    def _on_editor_export(self, project):
+        """Handle export from editor."""
+        if not self.current_item or not project:
+            return
+            
+        item = self.current_item
+        
+        # Build edits from project
+        from video_censor.editing.intervals import Action
+        
+        # Convert project edits to detection format
+        edited_data = {}
+        for edit in project.edits:
+            # Group by action type
+            if edit.action == Action.CUT:
+                key = 'cuts'
+            elif edit.action in (Action.MUTE, Action.BEEP):
+                key = 'profanity'
+            else:
+                key = 'visual_edits'
+            
+            if key not in edited_data:
+                edited_data[key] = []
+            
+            edited_data[key].append({
+                'start': edit.source_start,
+                'end': edit.source_end,
+                'reason': edit.reason,
+                'action': edit.action.value,
+            })
+        
+        # Save project-based edits to analysis path
+        try:
+            import json
+            with open(item.analysis_path, 'w') as f:
+                json.dump(edited_data, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save editor edits: {e}")
+        
+        # Switch back to setup
+        self.stack.setCurrentIndex(0)
+        self.status_label.setText("Exporting...")
+        
+        # Update item status and start export
+        item.status = "exporting"
+        item.progress = 0.5
+        self.queue_panel.refresh()
+        
+        # Run export in background
+        import threading
+        thread = threading.Thread(target=self._run_censor, args=(item,))
+        thread.daemon = True
+        thread.start()
+    
+    def _on_editor_closed(self):
+        """User closed the editor without exporting."""
+        self.stack.setCurrentIndex(1)  # Back to review panel
+        self.status_label.setText("🎬 Reviewing...")
         
     def _start_review(self, item_id: str):
         """Open the review panel for an item."""

@@ -14,7 +14,10 @@ nudity:
   merge_gap: 0.5
   min_cut_duration: 0.3
   min_segment_duration: 0.5
-  threshold: 0.35
+  threshold: 0.75  # Raised to reduce false positives
+  min_box_area_percent: 3.0  # Reject detections smaller than 3% of frame
+  max_aspect_ratio: 4.0  # Reject extreme aspect ratios (noise/artifacts)
+  scene_gap: 5.0  # Seconds - group nearby detections into scenes for review
 output:
   audio_bitrate: 192k
   audio_codec: aac

@@ -40,7 +40,7 @@ class ProfanityConfig:
 @dataclass
 class NudityConfig:
     """Configuration for nudity detection."""
-    threshold: float = 0.6
+    threshold: float = 0.75  # Raised from 0.6 to reduce false positives
     frame_interval: float = 0.25
     min_segment_duration: float = 0.5
     buffer_before: float = 0.25
@@ -53,6 +53,11 @@ class NudityConfig:
     body_parts: list = None  # Will default to all exposed parts
     # Minimum duration for a cut to be applied (prevents micro-cuts)
     min_cut_duration: float = 0.3
+    # False positive reduction filters
+    min_box_area_percent: float = 3.0  # Minimum detection box area as % of frame
+    max_aspect_ratio: float = 4.0  # Maximum allowed aspect ratio (rejects extreme shapes)
+    # Scene grouping for review - merge detections within this gap into one scene
+    scene_gap: float = 5.0  # Seconds between detections to group as one scene
 
     def __post_init__(self):
         if self.body_parts is None:

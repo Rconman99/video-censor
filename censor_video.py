@@ -334,7 +334,7 @@ def _analyze_video(input_path: Path, temp_dir: Path, config: Config, show_progre
         output_dir=frames_dir
     )
     
-    # Detect nudity with body part filtering
+    # Detect nudity with body part filtering and false positive reduction
     nudity_intervals = detect_nudity(
         frames,
         threshold=config.nudity.threshold,
@@ -342,6 +342,8 @@ def _analyze_video(input_path: Path, temp_dir: Path, config: Config, show_progre
         min_segment_duration=config.nudity.min_segment_duration,
         body_parts=config.nudity.body_parts if config.nudity.body_parts else None,
         min_cut_duration=config.nudity.min_cut_duration,
+        min_box_area_percent=config.nudity.min_box_area_percent,
+        max_aspect_ratio=config.nudity.max_aspect_ratio,
         show_progress=show_progress
     )
     
