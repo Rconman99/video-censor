@@ -43,6 +43,24 @@ COLORS = {
     "info": "#0ea5e9",
 }
 
+# Spacing System
+SPACING = {
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "xxl": 32,
+}
+
+# Border Radius
+RADIUS = {
+    "sm": 4,
+    "md": 8,
+    "lg": 12,
+    "xl": 16,
+}
+
 # Premium Cinema QSS Stylesheet
 DARK_STYLESHEET = """
 /* ============================================

@@ -776,7 +776,6 @@ def process_video(
         
         # Export intervals if requested
         if export_intervals_path:
-            import json
             from video_censor.detection.serializer import serialize_interval
                 
             data = {

@@ -232,6 +232,14 @@ class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     detection_cache: DetectionCacheConfig = field(default_factory=DetectionCacheConfig)
     
+    # Internal: Track where config was loaded from
+    _path: Optional[Path] = None
+    
+    @classmethod
+    def default(cls) -> "Config":
+        """Return default configuration."""
+        return cls()
+    
     @classmethod
     def load(cls, config_path: Optional[Path] = None) -> "Config":
         """
@@ -243,6 +251,7 @@ class Config:
         config = cls()
         
         if config_path and config_path.exists():
+            config._path = config_path  # Store path for save()
             logger.info(f"Loading configuration from {config_path}")
             with open(config_path, 'r') as f:
                 data = yaml.safe_load(f) or {}
@@ -346,12 +355,26 @@ class Config:
             handlers=handlers
         )
 
-    def save(self, config_path: Path) -> None:
+    def save(self, config_path: Optional[Path] = None) -> None:
         """Save configuration to YAML file."""
         from dataclasses import asdict
         
-        data = asdict(self)
-        logger.info(f"Saving configuration to {config_path}")
+        # Use provided path, or stored path, or default
+        target_path = config_path or self._path
         
-        with open(config_path, 'w') as f:
+        if not target_path:
+             # Fallback to default location if no path known
+             target_path = Path("config.yaml") 
+        
+        # Update stored path
+        self._path = target_path
+        
+        # Exclude internal fields
+        data = asdict(self)
+        if "_path" in data:
+            del data["_path"]
+            
+        logger.info(f"Saving configuration to {target_path}")
+        
+        with open(target_path, 'w') as f:
             yaml.dump(data, f, default_flow_style=False)

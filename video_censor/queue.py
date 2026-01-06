@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from .preferences import ContentFilterSettings
+from .error_handler import safe_operation, UserFriendlyError
 
 
 @dataclass
@@ -55,6 +56,7 @@ class QueueItem:
     # Parallel progress tracking
     audio_progress: float = 0.0
     video_progress: float = 0.0
+    time_remaining: str = ""  # Human-readable time estimate
     
     @property
     def filename(self) -> str:
@@ -526,7 +528,16 @@ def merge_detections(audio_results: List[Dict], visual_results: List[Dict], conf
         'nudity': visual_results
     }
 
+@safe_operation("video processing")
 async def process_video(video_path: str, config: Config) -> Dict[str, List[Dict]]:
+    """
+    Process video with user-friendly error wrapping.
+    """
+    if not Path(video_path).exists():
+        raise UserFriendlyError(
+            f"Video file not found: {Path(video_path).name}",
+            f"File does not exist: {video_path}"
+        )
     """
     Run audio transcription and visual detection.
     

@@ -957,37 +957,61 @@ class QueueItemWidget(QFrame):
         layout.setSpacing(6)
         layout.setContentsMargins(10, 8, 10, 8)
         
-        # Filename (elided)
-        name_label = QLabel(item.filename)
-        name_label.setStyleSheet("font-weight: bold; background: transparent; font-size: 12px;")
-        name_label.setWordWrap(False)
-        name_label.setMaximumWidth(280)
-        # Use QLabel's elide capability via style
-        layout.addWidget(name_label)
+        # Filename (properly elided) - expand to fill, truncate at END
+        self.name_label = QLabel()
+        self.name_label.setStyleSheet("font-weight: bold; background: transparent; font-size: 12px;")
+        self.name_label.setWordWrap(False)
+        self.name_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._set_elided_filename(item.filename)
+        self.name_label.setToolTip(item.filename)
+        layout.addWidget(self.name_label)
         
         # Profile and tags row
         tags_layout = QHBoxLayout()
         tags_layout.setSpacing(4)
         
-        profile_tag = QLabel(item.profile_name)
-        profile_tag.setStyleSheet("background: #1e1e28; color: #71717a; padding: 2px 6px; border-radius: 4px; font-size: 10px;")
+        profile_tag = QLabel(f"📋 {item.profile_name}")
+        profile_tag.setStyleSheet("background: #1e1e28; color: #a0a0aa; padding: 3px 8px; border-radius: 4px; font-size: 10px;")
+        profile_tag.setToolTip(f"Profile: {item.profile_name}")
         tags_layout.addWidget(profile_tag)
         
-        # Filter tags
-        summary = item.filters.short_summary()
-        if summary and summary != "None":
-            for tag in summary.split()[:3]:  # Limit tags
-                tag_label = QLabel(tag)
-                tag_label.setStyleSheet("background: #252530; color: #a0a0aa; padding: 2px 6px; border-radius: 4px; font-size: 10px;")
-                tags_layout.addWidget(tag_label)
+        # Filter indicator icons (clearer than cryptic abbreviations)
+        filter_icons = []
+        if item.filters.filter_language:
+            filter_icons.append(("🔇", "Profanity filter"))
+        if item.filters.filter_nudity:
+            filter_icons.append(("👁", "Nudity detection"))
+        if item.filters.filter_sexual_content:
+            filter_icons.append(("💕", "Sexual content filter"))
+        if item.filters.filter_violence_level > 0:
+            filter_icons.append(("⚔️", f"Violence level {item.filters.filter_violence_level}"))
+        
+        for icon, tooltip in filter_icons[:3]:
+            icon_label = QLabel(icon)
+            icon_label.setStyleSheet("background: #252530; padding: 3px 6px; border-radius: 4px; font-size: 11px;")
+            icon_label.setToolTip(tooltip)
+            tags_layout.addWidget(icon_label)
         
         tags_layout.addStretch()
         layout.addLayout(tags_layout)
         
-        # Status
+        # Status row: stage label + time estimate
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        
         self.status_label = QLabel(item.status_display())
         self.status_label.setStyleSheet(f"color: {self._status_color()}; font-size: 11px; background: transparent;")
-        layout.addWidget(self.status_label)
+        status_row.addWidget(self.status_label)
+        
+        status_row.addStretch()
+        
+        # Time estimate
+        self.time_label = QLabel("")
+        self.time_label.setStyleSheet("color: #5a5a6a; font-size: 10px; background: transparent;")
+        self.time_label.setVisible(item.is_processing)
+        status_row.addWidget(self.time_label)
+        
+        layout.addLayout(status_row)
         
         # Review Button (only shown if ready)
         self.review_btn = QPushButton("Review Edits")
@@ -1057,43 +1081,46 @@ class QueueItemWidget(QFrame):
         self.progress_bar.setMaximumHeight(6)
         progress_row.addWidget(self.progress_bar, 1)  # Stretch to fill
         
-        # Cancel Button (compact)
-        self.cancel_btn = QPushButton("✕")
+        # Cancel Button (clearer styling)
+        self.cancel_btn = QPushButton("✕ Cancel")
         self.cancel_btn.setToolTip("Cancel Processing")
-        self.cancel_btn.setFixedSize(24, 24)
+        self.cancel_btn.setFixedHeight(28)
         self.cancel_btn.setStyleSheet("""
             QPushButton {
-                background: #2e1f1f;
-                color: #ff5555;
-                border: 1px solid #382828;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 12px;
+                background: #3a2020;
+                color: #ff6b6b;
+                border: 1px solid #5a2020;
+                border-radius: 6px;
+                font-weight: 600;
+                font-size: 11px;
+                padding: 4px 10px;
             }
             QPushButton:hover {
-                background: #382828;
+                background: #4a2020;
+                border-color: #7a3030;
             }
         """)
         self.cancel_btn.clicked.connect(self._on_cancel_clicked)
         self.cancel_btn.setVisible(item.is_processing)
         progress_row.addWidget(self.cancel_btn)
         
-        # Delete Button (always visible for non-processing items)
-        self.delete_btn = QPushButton("🗑")
+        # Delete Button (clearer styling)
+        self.delete_btn = QPushButton("🗑 Remove")
         self.delete_btn.setToolTip("Remove from Queue")
-        self.delete_btn.setFixedSize(24, 24)
+        self.delete_btn.setFixedHeight(28)
         self.delete_btn.setStyleSheet("""
             QPushButton {
                 background: #1f1f2e;
-                color: #71717a;
-                border: 1px solid #282838;
-                border-radius: 4px;
-                font-size: 12px;
+                color: #a0a0b0;
+                border: 1px solid #303040;
+                border-radius: 6px;
+                font-size: 11px;
+                padding: 4px 10px;
             }
             QPushButton:hover {
                 background: #3a2424;
-                color: #ff6666;
-                border-color: #483030;
+                color: #ff6b6b;
+                border-color: #5a3030;
             }
         """)
         self.delete_btn.clicked.connect(self._on_delete_clicked)
@@ -1129,6 +1156,17 @@ class QueueItemWidget(QFrame):
         }
         return colors.get(self.item.status, "#71717a")
     
+    def _set_elided_filename(self, filename: str):
+        """Set filename with middle elision for long names"""
+        # Truncate in the middle to show start and end of filename
+        max_len = 45
+        if len(filename) > max_len:
+            half = (max_len - 3) // 2
+            elided = f"{filename[:half]}...{filename[-half:]}"
+        else:
+            elided = filename
+        self.name_label.setText(elided)
+    
     def update_display(self):
         self.status_label.setText(self.item.status_display())
         self.status_label.setStyleSheet(f"color: {self._status_color()}; font-size: 11px; background: transparent;")
@@ -1153,6 +1191,12 @@ class QueueItemWidget(QFrame):
         if hasattr(self, 'delete_btn'):
             # Show delete for anything not actively processing
             self.delete_btn.setVisible(not self.item.is_processing)
+        
+        # Time estimate (if available)
+        if hasattr(self, 'time_label'):
+            time_remaining = getattr(self.item, 'time_remaining', '')
+            self.time_label.setText(time_remaining)
+            self.time_label.setVisible(bool(time_remaining) and self.item.is_processing)
 
 
 class QueuePanel(QFrame):
@@ -1172,12 +1216,41 @@ class QueuePanel(QFrame):
         self.paused = not self.paused
         if self.paused:
             self.pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+            self.pause_btn.setText("Resume")
             self.pause_btn.setToolTip("Resume Processing")
-            self.pause_btn.setStyleSheet("background: #2e1f1f; border-radius: 4px; border: 1px solid #382828;")
+            self.pause_btn.setStyleSheet("""
+                QPushButton {
+                    background: #2e2f1f;
+                    color: #a0d080;
+                    border-radius: 6px;
+                    border: 1px solid #404020;
+                    font-size: 12px;
+                    font-weight: 600;
+                    padding: 6px 14px;
+                }
+                QPushButton:hover {
+                    background: #404020;
+                }
+            """)
         else:
             self.pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+            self.pause_btn.setText("Pause")
             self.pause_btn.setToolTip("Pause Processing")
-            self.pause_btn.setStyleSheet("background: #1f1f2e; border-radius: 4px; border: 1px solid #282838;")
+            self.pause_btn.setStyleSheet("""
+                QPushButton {
+                    background: #1f1f2e;
+                    color: #b0b0c0;
+                    border-radius: 6px;
+                    border: 1px solid #303040;
+                    font-size: 12px;
+                    font-weight: 600;
+                    padding: 6px 14px;
+                }
+                QPushButton:hover {
+                    background: #282840;
+                    border-color: #404060;
+                }
+            """)
         
         # Trigger processing update in main window if resuming
         if not self.paused:
@@ -1205,53 +1278,61 @@ class QueuePanel(QFrame):
         title.setStyleSheet("font-size: 14px; font-weight: bold; background: transparent;")
         header.addWidget(title)
         
-        self.count_label = QLabel("0/0 complete")
-        self.count_label.setStyleSheet("color: #71717a; font-size: 11px; background: transparent;")
+        self.count_label = QLabel("0 of 0 complete")
+        self.count_label.setStyleSheet("color: #71717a; font-size: 12px; background: transparent;")
         header.addWidget(self.count_label)
         
         header.addStretch()
         
-        # Pause button
+        # Pause button (with proper sizing)
         self.pause_btn = QPushButton()
         self.pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+        self.pause_btn.setText("Pause")
         self.pause_btn.setToolTip("Pause Processing")
-        self.pause_btn.setFixedSize(32, 28)
+        self.pause_btn.setMinimumWidth(100)  # Fits both "Pause" and "Resume"
+        self.pause_btn.setFixedHeight(32)
         self.pause_btn.setStyleSheet("""
             QPushButton {
                 background: #1f1f2e;
-                border-radius: 4px;
-                border: 1px solid #282838;
+                color: #b0b0c0;
+                border-radius: 6px;
+                border: 1px solid #303040;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 6px 14px;
             }
             QPushButton:hover {
-                background: #282838;
+                background: #282840;
+                border-color: #404060;
             }
         """)
         self.pause_btn.clicked.connect(self._toggle_pause)
         header.addWidget(self.pause_btn)
         
-        # Sleep Toggle Button
-        self.sleep_btn = QPushButton("Auto Sleep")
+        # Sleep Toggle Button (properly sized)
+        self.sleep_btn = QPushButton("💤 Auto-Sleep")
         self.sleep_btn.setCheckable(True)
         self.sleep_btn.setToolTip("Put computer to sleep when queue completes")
         self.sleep_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.sleep_btn.setFixedWidth(80) # Widen for text
-        self.sleep_btn.setFixedHeight(28)
+        self.sleep_btn.setMinimumWidth(110)  # Wide enough for text
+        self.sleep_btn.setFixedHeight(32)
         self.sleep_btn.setStyleSheet("""
             QPushButton {
                 background: #1f1f2e;
-                color: #71717a;
-                border: 1px solid #282838;
-                border-radius: 4px;
+                color: #a0a0aa;
+                border: 1px solid #303040;
+                border-radius: 6px;
                 font-size: 11px;
-                font-weight: bold;
+                font-weight: 600;
+                padding: 6px 12px;
             }
             QPushButton:checked {
                 background: #4c1d95;
                 color: #ffffff;
-                border: 1px solid #5b21b6;
+                border: 1px solid #6d28d9;
             }
             QPushButton:hover {
-                border-color: #3f3f46;
+                border-color: #404060;
             }
         """)
         self.sleep_btn.toggled.connect(self._on_sleep_changed)
@@ -1262,6 +1343,7 @@ class QueuePanel(QFrame):
         # Scroll area for items
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet("border: none; background: transparent;")
         
         self.items_widget = QWidget()
@@ -1292,9 +1374,9 @@ class QueuePanel(QFrame):
         if items:
             complete = self.queue.complete_count
             total = len(items)
-            self.count_label.setText(f"{complete}/{total} complete")
+            self.count_label.setText(f"{complete} of {total} complete")
         else:
-            self.count_label.setText("No videos in queue")
+            self.count_label.setText("Queue empty")
         
         for item in items:
             widget = QueueItemWidget(item)
@@ -1319,8 +1401,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Video Censor")
-        self.setMinimumSize(1100, 700)
-        self.resize(1200, 800)
+        self.setMinimumSize(1100, 650)  # Prevent smooshing
+        self.resize(1300, 850)
         
         # Force dark background on window
         self.setStyleSheet("""
@@ -1399,10 +1481,20 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         
         # Export (Render)
-        render_action = QAction("Quick Re-render...", self)
+        render_action = QAction("Quick Re-render", self)
         render_action.setShortcut(QKeySequence("Ctrl+R"))
         render_action.triggered.connect(self._quick_rerender)
         file_menu.addAction(render_action)
+        
+        # Edit Menu
+        edit_menu = menu_bar.addMenu("Edit")
+        edit_menu.addAction("Preferences...", self._show_preferences, QKeySequence("Ctrl+,"))
+        
+        # Help Menu
+        help_menu = menu_bar.addMenu("Help")
+        help_menu.addAction("Re-run Setup Wizard...", self._rerun_setup)
+        help_menu.addSeparator()
+        help_menu.addAction("About Video Censor", self._show_about)
     
     def _open_video_dialog(self):
         """Open video dialog wrapping _file_dropped logic."""
@@ -1545,6 +1637,45 @@ class MainWindow(QMainWindow):
             self.current_item.analysis_path = Path(auto_path)
             self.current_item.status = "review_ready" # Force status
             self.on_export_requested() # Call existing handler
+
+    def _rerun_setup(self):
+        """Reset first run flag and restart logic."""
+        from video_censor.first_run import FirstRunManager
+        
+        reply = QMessageBox.question(
+            self, "Re-run Setup",
+            "This will reset the setup status and allow you to run the wizard again.\n\n"
+            "You will need to restart the application.\n\nContinue?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            FirstRunManager.reset_first_run()
+            QMessageBox.information(
+                self, "Setup Reset",
+                "Setup has been reset.\n\nPlease restart Video Censor to run the wizard."
+            )
+            
+    def _show_about(self):
+        QMessageBox.about(
+            self, "About Video Censor",
+            "<h3>Video Censor v1.0</h3>"
+            "<p>Your local AI-powered content moderation tool.</p>"
+            "<p>Detects and censors profanity and nudity securely on your device.</p>"
+        )
+
+    def _show_preferences(self):
+        """Open settings dialog."""
+        from ui.preferences_dialog import PreferencesDialog
+        from PySide6.QtWidgets import QDialog
+        
+        dialog = PreferencesDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            # Reload config to apply changes
+            # Note: Detailed update logic handles in individual components usually,
+            # but main config object updates automatically if reloaded.
+            # For now, just logging.
+            print("Preferences updated.")
 
     def _update_title_modified(self):
         """Update window title with dirty state."""
@@ -1797,10 +1928,12 @@ class MainWindow(QMainWindow):
         
         content.addWidget(self.stack, 1)
         
-        # Right: Queue panel
+        # Right: Queue panel (flexible width with min/max)
         self.queue_panel = QueuePanel(self.processing_queue)
-        self.queue_panel.setFixedWidth(320)
-        content.addWidget(self.queue_panel)
+        self.queue_panel.setMinimumWidth(420)  # Wide enough for toolbar
+        self.queue_panel.setMaximumWidth(500)
+        self.queue_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        content.addWidget(self.queue_panel, stretch=0)  # Queue stays stable size
         
         # Tab 2: Search
         self.search_tab = SearchTab()

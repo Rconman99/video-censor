@@ -18,6 +18,32 @@ from PySide6.QtGui import QPalette, QColor
 from ui.main_window import MainWindow
 from ui.styles import DARK_STYLESHEET
 
+from video_censor.error_handler import handle_error, logger
+from ui.error_dialog import show_error
+
+def global_exception_handler(exc_type, exc_value, exc_tb):
+    """Handle uncaught exceptions globally"""
+    # Don't catch keyboard interrupt
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+    
+    # Log and show error
+    import traceback
+    details = ''.join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    title, message = handle_error(exc_value, "uncaught exception")
+    
+    logger.critical(f"Uncaught exception: {exc_value}")
+    logger.critical(details)
+    
+    # Show dialog if app is running
+    app = QApplication.instance()
+    if app:
+        show_error(title, message, details)
+
+# Install global handler
+sys.excepthook = global_exception_handler
+
 
 def main():
     """Main entry point for the Video Censor desktop app."""
@@ -62,12 +88,79 @@ def main():
     # Apply dark stylesheet
     app.setStyleSheet(DARK_STYLESHEET)
     
-    # Create and show main window
+    # Create and show main window - checks for first run first
+    from video_censor.first_run import FirstRunManager
+    
+    # Check for first run
+    if FirstRunManager.is_first_run():
+        from ui.setup_wizard import SetupWizard
+        
+        wizard = SetupWizard()
+        result = wizard.exec()
+        
+        if result == SetupWizard.Accepted:
+            # Save settings from wizard
+            _apply_wizard_settings(wizard)
+            FirstRunManager.mark_setup_complete()
+        else:
+            # User cancelled setup - exit app
+            sys.exit(0)
+
     window = MainWindow()
     window.show()
     
     # Run event loop
     sys.exit(app.exec())
+
+
+def _apply_wizard_settings(wizard):
+    """Apply settings chosen in wizard to config."""
+    from video_censor.config import Config
+    
+    try:
+        use_case = wizard.field("use_case")
+        performance = wizard.field("performance")
+        
+        # Map use case to preset
+        preset_map = {
+            0: "family_friendly",
+            1: "youtube_safe",
+            2: "default",
+            3: "minimal"
+        }
+        
+        # Map performance to mode
+        perf_map = {
+            0: "low_power",
+            1: "balanced",
+            2: "high_performance"
+        }
+        
+        # Load, update, and save config
+        config = Config.load()
+        if hasattr(wizard, 'use_case_value'): # Manual prop check
+             use_case = wizard.use_case_value
+             
+        preset_key = preset_map.get(use_case, "default")
+        # Note: preset application logic would go here if Config supported quick storage
+        # For now we just set individual prefs or print logger (stub implementation)
+        # config.apply_preset(preset_key)
+        
+        config.performance.hardware_acceleration = "auto"
+        # Map performance mode to specific settings
+        mode = perf_map.get(performance, "low_power")
+        
+        if mode == "low_power":
+            config.performance.parallel_detection = False
+            config.performance.stagger_delay = 2.0
+        elif mode == "high_performance":
+             config.performance.parallel_detection = True
+             config.performance.stagger_delay = 0.5
+        
+        config.save()
+        
+    except Exception as e:
+        print(f"Error applying wizard settings: {e}")
 
 
 if __name__ == "__main__":
