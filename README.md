@@ -4,6 +4,29 @@
 
 Fully local, offline video censoring powered by AI. No cloud services, no uploads—your videos stay private.
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![PySide6](https://img.shields.io/badge/GUI-PySide6-green.svg)](https://doc.qt.io/qtforpython/)
+
+---
+
+## 📸 Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/main-window.png" width="700" alt="Main Window">
+  <br><em>Main window with video queue and processing options</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/detection-review.png" width="700" alt="Detection Review">
+  <br><em>Severity-tiered detection review with batch actions</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/preferences.png" width="500" alt="Preferences">
+  <br><em>Customizable filter settings and preferences</em>
+</p>
+
 ---
 
 ## ✨ Features
