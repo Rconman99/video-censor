@@ -49,10 +49,18 @@ Fully local, offline video censoring powered by AI. No cloud services, no upload
 ### Option 1: Download Pre-built App (macOS)
 
 1. Go to [Releases](https://github.com/Rconman99/video-censor/releases)
-2. Download `VideoCensor-1.0.dmg`
+2. Download `VideoCensor-x.x.x.dmg`
 3. Drag to Applications and launch
 
-### Option 2: Run from Source
+### Option 2: Download Pre-built App (Windows)
+
+1. Go to [Releases](https://github.com/Rconman99/video-censor/releases)
+2. Download `VideoCensor-x.x.x-windows.zip`
+3. Extract and run `VideoCensor.exe`
+
+> **Note:** Windows may show a SmartScreen warning since the app isn't signed. Click "More info" → "Run anyway".
+
+### Option 3: Run from Source
 
 ```bash
 # Clone the repo
