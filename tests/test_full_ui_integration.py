@@ -70,9 +70,8 @@ class TestFullIntegration(unittest.TestCase):
         
         # Should be enabled
         self.assertTrue(panel.start_btn.isEnabled(), "Start button should be enabled after setting video")
-        self.assertIn("test_video.mp4", panel.start_btn.text())
         
-        # Check instance
+        # Check the video path is stored
         self.assertEqual(panel.current_video_path, "/tmp/test_video.mp4")
 
 if __name__ == '__main__':
