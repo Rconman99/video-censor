@@ -342,17 +342,12 @@ class Config:
         return config
     
     def setup_logging(self) -> None:
-        """Configure logging based on settings."""
-        level = getattr(logging, self.logging.level.upper(), logging.INFO)
-        
-        handlers = [logging.StreamHandler()]
-        if self.logging.log_file:
-            handlers.append(logging.FileHandler(self.logging.log_file))
-        
-        logging.basicConfig(
-            level=level,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=handlers
+        """Configure logging based on settings using centralized config."""
+        from .logging_config import setup_logging as _setup_logging
+        _setup_logging(
+            level=self.logging.level,
+            log_file=self.logging.log_file if self.logging.log_file else None,
+            console=self.logging.show_progress,
         )
 
     def save(self, config_path: Optional[Path] = None) -> None:

@@ -5,21 +5,9 @@ from datetime import datetime
 from typing import Optional, Callable, Tuple
 from functools import wraps
 
-# Setup logging to file
-LOG_DIR = Path.home() / ".videocensor" / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-LOG_FILE = LOG_DIR / f"videocensor_{datetime.now().strftime('%Y%m%d')}.log"
+from .logging_config import get_logger, get_log_dir
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
-)
-
-logger = logging.getLogger("VideoCensor")
+logger = get_logger(__name__)
 
 
 class UserFriendlyError(Exception):
