@@ -7,6 +7,8 @@ Fully local, offline video censoring powered by AI. No cloud services, no upload
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![PySide6](https://img.shields.io/badge/GUI-PySide6-green.svg)](https://doc.qt.io/qtforpython/)
+[![Build and Release](https://github.com/Rconman99/video-censor/actions/workflows/release.yml/badge.svg)](https://github.com/Rconman99/video-censor/actions/workflows/release.yml)
+[![Tests](https://github.com/Rconman99/video-censor/actions/workflows/test.yml/badge.svg)](https://github.com/Rconman99/video-censor/actions/workflows/test.yml)
 
 ---
 
