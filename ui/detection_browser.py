@@ -26,7 +26,9 @@ from ui.components.hover_preview import HoverPreview
 from ui.components.detection_group_header import DetectionGroupHeader
 from ui.components.tier_header import TierHeader
 from video_censor.profanity.severity import get_severity
+from video_censor.undo_manager import UndoManager
 from collections import defaultdict
+from copy import deepcopy
 from video_censor.config import Config
 
 
@@ -142,6 +144,9 @@ class DetectionBrowserPanel(QFrame):
         except Exception as e:
             print(f"Error loading config in DetectionBrowser: {e}")
             self.config = Config()
+        
+        # Undo/Redo manager
+        self.undo_manager = UndoManager()
         
         # Enable keyboard focus
         self.setFocusPolicy(Qt.StrongFocus)
@@ -991,6 +996,41 @@ class DetectionBrowserPanel(QFrame):
             
         return result
     
+    # ========== UNDO/REDO ==========
+    
+    def _get_state_snapshot(self) -> dict:
+        """Get a snapshot of current state for undo."""
+        return {
+            'data': deepcopy(self.data),
+            'kept': deepcopy(self.kept),
+            'deleted': deepcopy(self.deleted),
+        }
+    
+    def _restore_state(self, state: dict):
+        """Restore state from a snapshot."""
+        self.data = deepcopy(state['data'])
+        self.kept = deepcopy(state['kept'])
+        self.deleted = deepcopy(state['deleted'])
+        self._update_tab_counts()
+        self._refresh_all_sections()
+    
+    def push_undo(self, action_name: str, old_state: dict):
+        """Push an undo action after making changes."""
+        new_state = self._get_state_snapshot()
+        self.undo_manager.push(action_name, old_state, new_state)
+    
+    def undo(self):
+        """Undo last action."""
+        state = self.undo_manager.undo()
+        if state:
+            self._restore_state(state)
+    
+    def redo(self):
+        """Redo last undone action."""
+        state = self.undo_manager.redo()
+        if state:
+            self._restore_state(state)
+    
     # ========== KEYBOARD SHORTCUTS ==========
     
     def keyPressEvent(self, event):
@@ -1050,6 +1090,15 @@ class DetectionBrowserPanel(QFrame):
         elif key == Qt.Key_R:
             if current_segment:
                 self._reduce_region(current_segment)
+            event.accept()
+        elif key == Qt.Key_Z and event.modifiers() & Qt.ControlModifier:
+            if event.modifiers() & Qt.ShiftModifier:
+                self.redo()  # Ctrl+Shift+Z = Redo
+            else:
+                self.undo()  # Ctrl+Z = Undo
+            event.accept()
+        elif key == Qt.Key_Y and event.modifiers() & Qt.ControlModifier:
+            self.redo()  # Ctrl+Y = Redo (Windows style)
             event.accept()
         else:
             super().keyPressEvent(event)
