@@ -2694,8 +2694,17 @@ class MainWindow(QMainWindow):
             # Log completion for audit trail
             self._log_batch_result(item, "complete")
             
-            # Send push notification
+            # Send push notification (ntfy.sh)
             self._send_notification("complete", item)
+            
+            # Send system notification (OS-level)
+            notify_render_complete(item.input_path.name, str(item.output_path))
+            
+            # Store last output path for "Open Output Folder"
+            self.last_output_path = item.output_path
+            
+            # Show "Show in Folder" dialog on main thread
+            QTimer.singleShot(100, lambda: self._show_export_complete_dialog(item.output_path))
             
             # Save queue state (remove completed from persistence)
             self.processing_queue.save_state()
@@ -2708,6 +2717,21 @@ class MainWindow(QMainWindow):
             
             # Trigger next item
             QTimer.singleShot(100, self._process_next)
+    
+    def _show_export_complete_dialog(self, output_path: Path):
+        """Show dialog with option to reveal file in folder."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Export Complete ✅")
+        msg.setText(f"Video saved to:\n{output_path.name}")
+        msg.setInformativeText(f"Location: {output_path.parent}")
+        msg.setIcon(QMessageBox.Information)
+        
+        show_btn = msg.addButton("Show in Folder", QMessageBox.ActionRole)
+        msg.addButton(QMessageBox.Ok)
+        msg.exec()
+        
+        if msg.clickedButton() == show_btn:
+            reveal_in_finder(output_path)
     
     def _log_batch_result(self, item: QueueItem, status: str):
         """Log processing result to batch_log.txt for audit trail."""
