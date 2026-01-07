@@ -127,6 +127,85 @@ class DropZone(QFrame):
                 break
 
 
+class VideoInfoBar(QFrame):
+    """Compact bar showing video metadata (duration, resolution, size)."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(16)
+        
+        self.setStyleSheet("""
+            VideoInfoBar {
+                background-color: #1e1e32;
+                border-bottom: 1px solid #374151;
+                border-radius: 0;
+            }
+            QLabel { 
+                color: #9ca3af; 
+                font-size: 11px; 
+                background: transparent;
+            }
+        """)
+        
+        # Filename
+        self.filename_label = QLabel()
+        self.filename_label.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 12px;")
+        layout.addWidget(self.filename_label)
+        
+        layout.addStretch()
+        
+        # Duration
+        self.duration_label = QLabel()
+        layout.addWidget(self.duration_label)
+        
+        # Resolution
+        self.resolution_label = QLabel()
+        layout.addWidget(self.resolution_label)
+        
+        # File size
+        self.size_label = QLabel()
+        layout.addWidget(self.size_label)
+        
+        # Audio indicator
+        self.audio_label = QLabel()
+        layout.addWidget(self.audio_label)
+        
+        self.setFixedHeight(32)
+        self.setVisible(False)
+    
+    def set_info(self, info):
+        """Update display with video info."""
+        # Truncate long filenames
+        name = info.filename
+        if len(name) > 50:
+            name = name[:25] + "..." + name[-22:]
+        
+        self.filename_label.setText(name)
+        self.filename_label.setToolTip(info.filename)
+        
+        self.duration_label.setText(f"⏱ {info.duration_str}")
+        self.resolution_label.setText(f"📺 {info.resolution_str}")
+        self.size_label.setText(f"💾 {info.file_size_str}")
+        
+        if info.has_audio:
+            self.audio_label.setText(f"🔊 {info.audio_codec}")
+            self.audio_label.setStyleSheet("color: #9ca3af;")
+        else:
+            self.audio_label.setText("🔇 No audio")
+            self.audio_label.setStyleSheet("color: #f59e0b;")
+        
+        self.setVisible(True)
+    
+    def clear(self):
+        """Hide and clear the info bar."""
+        self.setVisible(False)
+
+
 class PreferencePanel(QFrame):
     """Preference manager panel for configuring filters."""
     
@@ -2115,10 +2194,14 @@ class MainWindow(QMainWindow):
         toolbar.addAction(rerender_btn)
 
     def _on_file_dropped(self, path: str):
+        # Track in recent files
+        add_recent_file(path)
+        if hasattr(self, 'recent_menu'):
+            self._update_recent_menu()
+        
         # Create temporary QueueItem to context
         video_path_obj = Path(path)
         # Create output path (default)
-        from video_censor.ui.main_window import OUTPUT_DIR # Import if needed or use global
         output_format = self.format_combo.currentText() if hasattr(self, 'format_combo') else "mp4"
         output_path = Path(OUTPUT_DIR) / f"{video_path_obj.stem}.CENSORED.{output_format}"
         
@@ -2129,6 +2212,11 @@ class MainWindow(QMainWindow):
              filters=ContentFilterSettings(), # Default
              status="pending"
         )
+        
+        # Get and display video info
+        info = get_video_info(path)
+        if info and hasattr(self, 'video_info_bar'):
+            self.video_info_bar.set_info(info)
         
         if self._check_saved_detections(path):
             # If loaded successfully, switch to review
