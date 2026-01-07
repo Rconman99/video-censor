@@ -1051,7 +1051,6 @@ def main() -> int:
         
         # Save JSON summary if requested
         if args.save_summary:
-            import json
             with open(args.save_summary, 'w') as f:
                 json.dump(summary, f, indent=2)
             logger.info(f"Summary saved to {args.save_summary}")
