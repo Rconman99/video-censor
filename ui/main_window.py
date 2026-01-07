@@ -1921,6 +1921,11 @@ class MainWindow(QMainWindow):
         sep.setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0a0a0e, stop:0.3 #383850, stop:0.5 #6366f1, stop:0.7 #383850, stop:1 #0a0a0e);")
         main_layout.addWidget(sep)
         
+        # Video Info Bar (hidden until video loads)
+        self.video_info_bar = VideoInfoBar()
+        self.video_info_bar.setVisible(False)
+        main_layout.addWidget(self.video_info_bar)
+        
         # Tabs
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
