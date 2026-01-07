@@ -83,9 +83,22 @@ class HoverPreview(QWidget):
         self.show()
         
     def stop_preview(self):
-        self.media_player.pause()
+        """Stop playback and hide the preview."""
         self.loop_timer.stop()
+        self.media_player.stop()
+        self.media_player.setPosition(0)
         self.hide()
+    
+    def hideEvent(self, event):
+        """Ensure media stops when widget is hidden."""
+        self.loop_timer.stop()
+        self.media_player.stop()
+        super().hideEvent(event)
+    
+    def leaveEvent(self, event):
+        """Stop preview when mouse leaves the widget."""
+        self.stop_preview()
+        super().leaveEvent(event)
         
     def _check_loop(self):
         if self.media_player.position() > self.start_ms + self.duration_ms:

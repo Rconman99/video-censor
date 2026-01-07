@@ -33,6 +33,12 @@ class ReviewPanel(QFrame):
         self._duration = 0
         
         self._create_ui()
+    
+    def hideEvent(self, event):
+        """Stop playback when panel is hidden."""
+        if hasattr(self, 'player'):
+            self.stop_playback()
+        super().hideEvent(event)
         
     def _create_ui(self):
         layout = QVBoxLayout(self)
