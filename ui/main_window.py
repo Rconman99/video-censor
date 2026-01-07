@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from .search_tab import SearchTab
 from .review_panel import ReviewPanel
+from .components.shortcuts_overlay import ShortcutsOverlay
 from video_censor.preferences import ContentFilterSettings, Profile
 from video_censor.profile_manager import ProfileManager
 from video_censor.queue import QueueItem, ProcessingQueue
@@ -1531,6 +1532,10 @@ class MainWindow(QMainWindow):
         
         # Check disk space on startup
         self._check_disk_space()
+        
+        # Shortcuts overlay (press ? or F1)
+        self.shortcuts_overlay = ShortcutsOverlay(self)
+        self.shortcuts_overlay.hide()
 
     def _create_menu(self):
         """Create application menu bar."""
@@ -1583,6 +1588,7 @@ class MainWindow(QMainWindow):
         
         # Help Menu
         help_menu = menu_bar.addMenu("Help")
+        help_menu.addAction("Keyboard Shortcuts", self._toggle_shortcuts, QKeySequence("?"))
         help_menu.addAction("Re-run Setup Wizard...", self._rerun_setup)
         help_menu.addSeparator()
         help_menu.addAction("About Video Censor", self._show_about)
@@ -1804,10 +1810,14 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         QMessageBox.about(
             self, "About Video Censor",
-            "<h3>Video Censor v1.0</h3>"
+            "<h3>Video Censor v1.1</h3>"
             "<p>Your local AI-powered content moderation tool.</p>"
             "<p>Detects and censors profanity and nudity securely on your device.</p>"
         )
+    
+    def _toggle_shortcuts(self):
+        """Toggle keyboard shortcuts overlay."""
+        self.shortcuts_overlay.toggle()
 
     def _show_preferences(self):
         """Open settings dialog."""
