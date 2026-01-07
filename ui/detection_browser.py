@@ -689,9 +689,11 @@ class DetectionBrowserPanel(QFrame):
         """Keep all items in a named tier."""
         if not self.current_track: return
         
+        old_state = self._get_state_snapshot()
         overrides = self.config.profanity.severity_overrides
         custom_tiers = self.config.profanity.custom_tiers
         to_review = list(self.data.get(self.current_track, []))
+        count = 0
         
         for segment in to_review:
              meta = segment.get('metadata', {})
@@ -700,16 +702,21 @@ class DetectionBrowserPanel(QFrame):
              
              if t_name == tier_name:
                  self._on_keep(segment, refresh=False)
+                 count += 1
                  
+        if count > 0:
+            self.push_undo(f"Keep all {tier_name} ({count})", old_state)
         self._refresh_all_sections()
         
     def _on_batch_tier_skip(self, tier_name):
         """Skip (delete) all items in a named tier."""
         if not self.current_track: return
         
+        old_state = self._get_state_snapshot()
         overrides = self.config.profanity.severity_overrides
         custom_tiers = self.config.profanity.custom_tiers
         to_review = list(self.data.get(self.current_track, []))
+        count = 0
         
         for segment in to_review:
              meta = segment.get('metadata', {})
@@ -718,34 +725,47 @@ class DetectionBrowserPanel(QFrame):
              
              if t_name == tier_name:
                  self._on_delete(segment, refresh=False)
+                 count += 1
                  
+        if count > 0:
+            self.push_undo(f"Skip all {tier_name} ({count})", old_state)
         self._refresh_all_sections()
                 
     def _on_batch_group_keep(self, word):
         """Keep all items in a named group."""
         if not self.current_track: return
         
+        old_state = self._get_state_snapshot()
         # Find all segments matching this word
         to_review = list(self.data.get(self.current_track, []))
+        count = 0
         for segment in to_review:
              meta = segment.get('metadata', {})
              w = meta.get('matched_pattern') or meta.get('word') or segment.get('label') or "Unknown"
              if w.lower() == word.lower():
                  self._on_keep(segment, refresh=False)
+                 count += 1
                  
+        if count > 0:
+            self.push_undo(f"Keep all '{word}' ({count})", old_state)
         self._refresh_all_sections()
         
     def _on_batch_group_skip(self, word):
         """Delete all items in a named group."""
         if not self.current_track: return
         
+        old_state = self._get_state_snapshot()
         to_review = list(self.data.get(self.current_track, []))
+        count = 0
         for segment in to_review:
              meta = segment.get('metadata', {})
              w = meta.get('matched_pattern') or meta.get('word') or segment.get('label') or "Unknown"
              if w.lower() == word.lower():
                  self._on_delete(segment, refresh=False)
+                 count += 1
                  
+        if count > 0:
+            self.push_undo(f"Skip all '{word}' ({count})", old_state)
         self._refresh_all_sections()
 
     def _on_group_word_toggle(self, state):
@@ -910,16 +930,24 @@ class DetectionBrowserPanel(QFrame):
     def _keep_all(self):
         # Keep all remaining
         if not self.current_track: return
+        old_state = self._get_state_snapshot()
         to_review = list(self.data.get(self.current_track, []))
+        count = len(to_review)
         for s in to_review:
             self._on_keep(s, refresh=False)
+        if count > 0:
+            self.push_undo(f"Keep all ({count})", old_state)
         self._refresh_all_sections()
         
     def _delete_all(self):
         if not self.current_track: return
+        old_state = self._get_state_snapshot()
         to_review = list(self.data.get(self.current_track, []))
+        count = len(to_review)
         for s in to_review:
             self._on_delete(s, refresh=False)
+        if count > 0:
+            self.push_undo(f"Skip all ({count})", old_state)
         self._refresh_all_sections()
         
     def _on_selection_changed(self, segment, is_selected: bool):
@@ -962,23 +990,33 @@ class DetectionBrowserPanel(QFrame):
     def _keep_selected(self):
         if not self.current_track: return
         
+        old_state = self._get_state_snapshot()
         to_review = list(self.data.get(self.current_track, []))
         segments_to_keep = [s for s in to_review if id(s) in self.selected_segments]
+        count = len(segments_to_keep)
         
         for segment in segments_to_keep:
             self._on_keep(segment, refresh=False)
-            
+        
+        if count > 0:
+            self.push_undo(f"Keep selected ({count})", old_state)
+        self.selected_segments.clear()
         self._refresh_all_sections()
         
     def _delete_selected(self):
         if not self.current_track: return
         
+        old_state = self._get_state_snapshot()
         to_review = list(self.data.get(self.current_track, []))
         segments_to_delete = [s for s in to_review if id(s) in self.selected_segments]
+        count = len(segments_to_delete)
         
         for segment in segments_to_delete:
             self._on_delete(segment, refresh=False)
-            
+        
+        if count > 0:
+            self.push_undo(f"Skip selected ({count})", old_state)
+        self.selected_segments.clear()
         self._refresh_all_sections()
         
     def get_final_data(self) -> dict:
