@@ -1194,33 +1194,53 @@ class DetectionBrowserPanel(QFrame):
         """Skip all detections with confidence below threshold."""
         if not self.current_track:
             return
+        old_state = self._get_state_snapshot()
         to_review = list(self.data.get(self.current_track, []))
+        count = 0
         for s in to_review:
             if s.get('confidence', 1.0) < threshold:
                 self._on_delete(s, refresh=False)
+                count += 1
+        if count > 0:
+            self.push_undo(f"Skip low confidence ({count})", old_state)
         self._refresh_all_sections()
     
     def confirm_high_confidence(self, threshold: float = 0.8):
         """Confirm all detections with confidence above threshold."""
         if not self.current_track:
             return
+        old_state = self._get_state_snapshot()
         to_review = list(self.data.get(self.current_track, []))
+        count = 0
         for s in to_review:
             if s.get('confidence', 1.0) >= threshold:
                 self._on_keep(s, refresh=False)
+                count += 1
+        if count > 0:
+            self.push_undo(f"Keep high confidence ({count})", old_state)
         self._refresh_all_sections()
     
     def skip_audio_only(self):
         """Skip all audio-only (profanity) detections."""
         if self.current_track == 'profanity':
-            for s in list(self.data.get(self.current_track, [])):
+            old_state = self._get_state_snapshot()
+            to_skip = list(self.data.get(self.current_track, []))
+            count = len(to_skip)
+            for s in to_skip:
                 self._on_delete(s, refresh=False)
+            if count > 0:
+                self.push_undo(f"Skip all audio ({count})", old_state)
         self._refresh_all_sections()
     
     def skip_visual_only(self):
         """Skip all visual-only (nudity) detections."""
         if self.current_track == 'nudity':
-            for s in list(self.data.get(self.current_track, [])):
+            old_state = self._get_state_snapshot()
+            to_skip = list(self.data.get(self.current_track, []))
+            count = len(to_skip)
+            for s in to_skip:
                 self._on_delete(s, refresh=False)
+            if count > 0:
+                self.push_undo(f"Skip all visual ({count})", old_state)
         self._refresh_all_sections()
 
