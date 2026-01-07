@@ -94,3 +94,65 @@ def notify_progress(topic: str, filename: str, progress: int, eta: str) -> bool:
         priority="low",
         tags=["hourglass_flowing_sand"]
     )
+
+
+# --- System (OS-level) Notifications ---
+
+def notify_system(title: str, message: str, sound: bool = True) -> bool:
+    """
+    Send a native OS notification.
+    Works on macOS, Windows, and Linux.
+    """
+    import platform
+    import subprocess
+    
+    system = platform.system()
+    
+    try:
+        if system == "Darwin":  # macOS
+            script = f'''
+            display notification "{message}" with title "{title}" sound name "Glass"
+            '''
+            subprocess.run(["osascript", "-e", script], check=False)
+            return True
+        elif system == "Windows":
+            # Use Windows toast notifications via PowerShell
+            script = f'''
+            [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+            $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+            $textNodes = $template.GetElementsByTagName("text")
+            $textNodes.Item(0).AppendChild($template.CreateTextNode("{title}")) | Out-Null
+            $textNodes.Item(1).AppendChild($template.CreateTextNode("{message}")) | Out-Null
+            $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("VideoCensor")
+            $notifier.Show([Windows.UI.Notifications.ToastNotification]::new($template))
+            '''
+            subprocess.run(["powershell", "-Command", script], check=False)
+            return True
+        else:  # Linux
+            subprocess.run(["notify-send", title, message], check=False)
+            return True
+    except Exception as e:
+        print(f"Failed to send system notification: {e}")
+        return False
+
+
+def notify_processing_complete(filename: str, success: bool = True):
+    """Notify user when video processing is complete."""
+    if success:
+        notify_system(
+            title="✅ Processing Complete",
+            message=f"{filename} is ready for review"
+        )
+    else:
+        notify_system(
+            title="❌ Processing Failed",
+            message=f"{filename} encountered an error"
+        )
+
+
+def notify_render_complete(filename: str, output_path: str):
+    """Notify user when video rendering is complete."""
+    notify_system(
+        title="🎬 Export Complete",
+        message=f"Saved: {Path(output_path).name}"
+    )
