@@ -2685,18 +2685,40 @@ class MainWindow(QMainWindow):
                 pass
         self.current_process = None
     
-    def _delete_queue_item(self, item_id: str):
-        """Delete an item from the queue."""
+    def _delete_queue_item(self, item_id: str, force: bool = True):
+        """Delete an item from the queue. Force-kills if processing."""
         item = self.processing_queue.get(item_id)
-        if item:
-            # Don't delete if currently processing
-            if item.is_processing:
-                return
-            
-            self.processing_queue.remove(item_id)
-            self.processing_queue.save_state()
-            self.queue_panel.refresh()
-            print(f"Deleted queue item: {item.filename}")
+        if not item:
+            return
+        
+        # If processing, kill the subprocess first
+        if item.is_processing:
+            if self.current_item and self.current_item.id == item_id:
+                # Kill current subprocess
+                if self.current_process:
+                    try:
+                        self.current_process.terminate()
+                        try:
+                            self.current_process.wait(timeout=2)
+                        except:
+                            self.current_process.kill()
+                    except Exception as e:
+                        print(f"Error killing process: {e}")
+                    self.current_process = None
+                
+                item.cancel()
+                self.processing = False
+                self.current_item = None
+        
+        # Always remove from queue
+        self.processing_queue.remove(item_id)
+        self.processing_queue.save_state()
+        self.queue_panel.refresh()
+        print(f"Removed queue item: {item.filename}")
+        
+        # Trigger next if we had to cancel
+        if self.processing_queue.pending_count > 0 and not self.processing:
+            QTimer.singleShot(500, self._process_next)
 
     @Slot(str)
     def on_item_complete(self, item_id: str):

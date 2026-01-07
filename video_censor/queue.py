@@ -406,6 +406,13 @@ class ProcessingQueue:
                     video_progress=item_data.get("video_progress", 0.0)
                 )
                 
+                # Reset stuck processing items on restart
+                if item.status == "processing" or item.status == "analyzing":
+                    print(f"Resetting stuck item to pending: {item.filename}")
+                    item.status = "pending" if not item.analysis_path else "review_ready"
+                    item.progress = 0.0
+                    item.progress_stage = ""
+                
                 # If restoring in review state, trigger ready logic
                 if item.is_review_ready:
                     item.progress = 0.5
