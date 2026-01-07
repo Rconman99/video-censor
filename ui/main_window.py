@@ -31,7 +31,10 @@ from video_censor.profile_manager import ProfileManager
 from video_censor.queue import QueueItem, ProcessingQueue
 from video_censor.detection.serializer import DetectionSerializer, save_detections
 from video_censor.config import Config
-from video_censor.queue import QueueItem, ProcessingQueue
+from video_censor.recent_files import get_recent_files, add_recent_file, clear_recent_files
+from video_censor.video_info import get_video_info
+from video_censor.file_utils import open_folder, reveal_in_finder
+from video_censor.notifications import notify_processing_complete, notify_render_complete
 
 
 # Supported video formats
@@ -1459,6 +1462,15 @@ class MainWindow(QMainWindow):
         
         # Open
         file_menu.addAction("Open Video...", self._open_video_dialog, QKeySequence("Ctrl+O"))
+        
+        # Recent Files submenu
+        self.recent_menu = file_menu.addMenu("Open Recent")
+        self._update_recent_menu()
+        
+        file_menu.addSeparator()
+        
+        # Open Output Folder
+        file_menu.addAction("Open Output Folder", self._open_output_folder, QKeySequence("Ctrl+Shift+F"))
         file_menu.addSeparator()
         
         # Import/Load
@@ -1500,7 +1512,61 @@ class MainWindow(QMainWindow):
         """Open video dialog wrapping _file_dropped logic."""
         path, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.mkv *.avi *.mov)")
         if path:
+            add_recent_file(path)
+            self._update_recent_menu()
             self._file_dropped(path)
+    
+    def _update_recent_menu(self):
+        """Populate the recent files submenu."""
+        self.recent_menu.clear()
+        recent = get_recent_files()
+        
+        if not recent:
+            action = self.recent_menu.addAction("No Recent Files")
+            action.setEnabled(False)
+        else:
+            for i, file_info in enumerate(recent[:9]):
+                action = self.recent_menu.addAction(f"{i+1}. {file_info['name']}")
+                action.setShortcut(QKeySequence(f"Ctrl+{i+1}"))
+                action.setToolTip(file_info['path'])
+                path = file_info['path']
+                action.triggered.connect(lambda checked, p=path: self._open_recent_file(p))
+            
+            if len(recent) > 9:
+                for file_info in recent[9:]:
+                    action = self.recent_menu.addAction(file_info['name'])
+                    path = file_info['path']
+                    action.triggered.connect(lambda checked, p=path: self._open_recent_file(p))
+            
+            self.recent_menu.addSeparator()
+            self.recent_menu.addAction("Clear Recent", self._clear_recent)
+    
+    def _open_recent_file(self, path: str):
+        """Open a file from the recent files list."""
+        if Path(path).exists():
+            add_recent_file(path)
+            self._update_recent_menu()
+            self._file_dropped(path)
+        else:
+            QMessageBox.warning(self, "File Not Found", f"The file no longer exists:\n{path}")
+            self._update_recent_menu()
+    
+    def _clear_recent(self):
+        """Clear the recent files list."""
+        clear_recent_files()
+        self._update_recent_menu()
+    
+    def _open_output_folder(self):
+        """Open the output folder in file browser."""
+        output_path = getattr(self, 'last_output_path', None)
+        if output_path and Path(output_path).parent.exists():
+            open_folder(Path(output_path).parent)
+        else:
+            # Default to OUTPUT_DIR or user's home
+            if Path(OUTPUT_DIR).exists():
+                open_folder(OUTPUT_DIR)
+            else:
+                open_folder(Path.home() / "Movies")
             
     def _check_saved_detections(self, video_path: str):
         """Check for auto-saved detections on file open."""
