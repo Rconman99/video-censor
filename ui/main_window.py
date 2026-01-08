@@ -3164,16 +3164,49 @@ class MainWindow(QMainWindow):
             pass
 
     def closeEvent(self, event):
-        """Handle application close."""
+        """Handle application close - clean up all resources."""
+        # Stop any running processing
+        if self.current_process:
+            try:
+                self.current_process.terminate()
+                self.current_process.wait(timeout=2)
+            except:
+                try:
+                    self.current_process.kill()
+                except:
+                    pass
+            self.current_process = None
+        
+        # Clean up detection browser hover preview
+        if hasattr(self, 'detection_browser') and hasattr(self.detection_browser, 'hover_preview'):
+            try:
+                self.detection_browser.hover_preview.stop_preview()
+                self.detection_browser.hover_preview.close()
+                self.detection_browser.hover_preview.deleteLater()
+            except:
+                pass
+        
+        # Clean up review panel media
+        if hasattr(self, 'review_panel'):
+            try:
+                self.review_panel.stop_playback()
+            except:
+                pass
+        
+        # Clean up any orphan top-level widgets with Qt.Tool or Qt.ToolTip flags
+        from PySide6.QtWidgets import QApplication
+        for widget in QApplication.topLevelWidgets():
+            if widget is not self and widget.isVisible():
+                try:
+                    widget.close()
+                except:
+                    pass
+        
         # Trigger sync on close if enabled
-        # Note: This might not finish if we exit immediately.
-        # We can try running it synchronously or just kick it off and hope OS gives it a second.
-        # Ideally we block for a second or two.
         try:
             config = self.preference_panel.config
             if config.sync.enabled and config.sync.auto_sync and config.sync.user_id:
                 print("Performing exit sync...")
-                # Run synchronously for exit
                 from video_censor.profanity.wordlist import sync_custom_wordlist
                 from video_censor.presets import sync_presets
                 sync_custom_wordlist(config)

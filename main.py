@@ -45,6 +45,30 @@ def global_exception_handler(exc_type, exc_value, exc_tb):
 sys.excepthook = global_exception_handler
 
 
+# Cleanup handler for orphan processes on exit/crash
+import atexit
+import signal
+import subprocess
+
+def cleanup_orphan_processes():
+    """Kill any orphan media processes on exit."""
+    try:
+        subprocess.run(["pkill", "-f", "ffplay"], capture_output=True, timeout=2)
+        subprocess.run(["pkill", "-f", "mpv"], capture_output=True, timeout=2)
+    except:
+        pass
+
+atexit.register(cleanup_orphan_processes)
+
+def signal_handler(sig, frame):
+    """Handle signals by cleaning up and exiting."""
+    cleanup_orphan_processes()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+
 def main():
     """Main entry point for the Video Censor desktop app."""
     # Create application
