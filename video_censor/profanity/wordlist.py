@@ -130,8 +130,8 @@ def _build_profanity_set() -> Set[str]:
         "screw", "screwing", "screwed",
         "cocks", "cocky", "cocksucker",
         
-        # Religious exclamations
-        "jesus", "christ", "jesuschrist", "god", "oh my god", "omg",
+        # Religious exclamations (standalone 'god' removed to avoid 'good' false positive)
+        "jesus", "christ", "jesuschrist", "oh my god", "omg",
         "goddamnit", "godforsaken",
         
         # Racial/ethnic slurs
