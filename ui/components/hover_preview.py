@@ -14,8 +14,11 @@ class HoverPreview(QWidget):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowFlags(Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # Use Popup flag with parent - will close when parent closes
+        # Remove WindowStaysOnTopHint to avoid orphan windows
+        self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_DeleteOnClose)  # Ensure cleanup
         self.setFixedSize(320, 200) # 16:9 approx
         
         self.layout = QVBoxLayout(self)
