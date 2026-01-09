@@ -641,6 +641,7 @@ class EditorTimelineWidget(TimelineWidget):
         self._edits: List[EditDecision] = []
         self._snap_enabled = True
         self._snap_threshold = 0.5
+        self._pending_selection = None  # (start, end, category) for track region selection
 
     
     def _create_action_buttons(self):
@@ -765,43 +766,35 @@ class EditorTimelineWidget(TimelineWidget):
     
     def _apply_action(self, action: Action):
         """Apply an action to the current selection, creating an edit."""
+        # Check pending track selection first
+        if self._pending_selection:
+            start, end, category = self._pending_selection
+            self._create_edit(start, end, action)
+            self._cancel_selection()
+            return
+        
+        # Fall back to overlay selection
         if not self.selection_overlay.selection:
             return
         
         sel = self.selection_overlay.selection
-        
-        # Create the edit
-        edit = EditDecision(
-            source_start=sel.normalized_start,
-            source_end=sel.normalized_end,
-            action=action,
-            is_provisional=False
-        )
-        
-        self._edits.append(edit)
-        self.edits_lane.set_edits(self._edits)
-        
-        # Select the new edit
-        self.edits_lane._selected_edits.clear()
-        self.edits_lane._selected_edits.add(id(edit))
-        self.edits_lane.setFocus()
-        self.edits_lane.update()
-        
-        # Emit signal for external listeners
-        self.edit_action_requested.emit(
-            action.value,
-            sel.normalized_start,
-            sel.normalized_end
-        )
+        self._create_edit(sel.normalized_start, sel.normalized_end, action)
         
         # Clear selection after action
         self._cancel_selection()
 
     
     def _cancel_selection(self):
-        """Clear the current selection."""
+        """Clear all selections from overlay and tracks."""
+        self._pending_selection = None
         self.selection_overlay.clear_selection()
         self.actions_bar.setVisible(False)
+        
+        # Clear selection from all tracks
+        from .timeline import TimelineTrack
+        for track in self.findChildren(TimelineTrack):
+            track.clear_selection()
+
     
     def set_snap_enabled(self, enabled: bool):
         """Enable/disable snapping."""
@@ -814,7 +807,7 @@ class EditorTimelineWidget(TimelineWidget):
         self.selection_overlay.snap_threshold = threshold
     
     def _connect_track_signals(self):
-        """Connect detection track clicks to edit creation."""
+        """Connect detection track clicks and region selections to edit creation."""
         from .timeline import TimelineTrack
         for track in self.findChildren(TimelineTrack):
             # Disconnect any existing to avoid duplicates
@@ -822,19 +815,44 @@ class EditorTimelineWidget(TimelineWidget):
                 track.detection_clicked.disconnect(self._on_detection_clicked)
             except:
                 pass
+            try:
+                track.region_selected.disconnect(self._on_track_region_selected)
+            except:
+                pass
             track.detection_clicked.connect(self._on_detection_clicked)
+            track.region_selected.connect(self._on_track_region_selected)
+    
+    def _on_track_region_selected(self, start: float, end: float, category: str):
+        """Show action bar when user selects a region on any track."""
+        self._pending_selection = (start, end, category)
+        
+        # Show action buttons
+        self.actions_bar.setVisible(True)
+        self.actions_bar.raise_()  # Bring to front
+        
+        # Highlight recommended action based on category
+        # Reset all button styles first
+        self.btn_blur.setStyleSheet(self._action_btn_style("#a855f7"))
+        self.btn_mute.setStyleSheet(self._action_btn_style("#fbbf24"))
+        
+        # Emphasize recommended action
+        if category in ('nudity', 'sexual_content'):
+            self.btn_blur.setStyleSheet(self._action_btn_style("#a855f7") + "border: 2px solid white;")
+        else:
+            self.btn_mute.setStyleSheet(self._action_btn_style("#fbbf24") + "border: 2px solid white;")
     
     def _on_detection_clicked(self, start: float, end: float, category: str):
         """Create an edit from a clicked detection."""
-        import uuid
-        
         # Determine default action based on category
         if category in ('nudity', 'sexual_content'):
             action = Action.BLUR
         else:
             action = Action.MUTE
         
-        # Create new edit
+        self._create_edit(start, end, action)
+    
+    def _create_edit(self, start: float, end: float, action: Action):
+        """Create an EditDecision and add to edits lane."""
         edit = EditDecision(
             source_start=start,
             source_end=end,
@@ -850,3 +868,6 @@ class EditorTimelineWidget(TimelineWidget):
         self.edits_lane._selected_edits.add(id(edit))
         self.edits_lane.setFocus()
         self.edits_lane.update()
+        
+        # Emit signal
+        self.edit_action_requested.emit(action.value, start, end)

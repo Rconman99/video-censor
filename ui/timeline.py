@@ -81,6 +81,7 @@ class TimelineTrack(QWidget):
     segment_clicked = Signal(object)  # Emits segment data
     segment_deleted = Signal(object)  # Emits segment to delete
     detection_clicked = Signal(float, float, str)  # start, end, category - for creating edits
+    region_selected = Signal(float, float, str)  # start, end, category - for drag selection
     
     def __init__(self, title: str, color: QColor, duration: float, segments: list, category: str = None, parent=None):
         super().__init__(parent)
@@ -94,10 +95,23 @@ class TimelineTrack(QWidget):
         self.setFixedHeight(36)
         self.setMouseTracking(True)
         
+        # Selection state for drag selection
+        self._selecting = False
+        self._selection_start = None
+        self._selection_end = None
+        
     def set_playhead(self, position_sec: float):
         """Update playhead position."""
         self.playhead_pos = position_sec
         self.update()
+    
+    def clear_selection(self):
+        """Clear the drag selection."""
+        self._selection_start = None
+        self._selection_end = None
+        self._selecting = False
+        self.update()
+
         
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -165,6 +179,21 @@ class TimelineTrack(QWidget):
                 QPoint(int(playhead_x), 6)
             ]
             painter.drawPolygon(triangle)
+        
+        # Draw selection region
+        if self._selection_start is not None and self._selection_end is not None:
+            sel_x1 = int((min(self._selection_start, self._selection_end) / self.duration) * width)
+            sel_x2 = int((max(self._selection_start, self._selection_end) / self.duration) * width)
+            
+            # Blue selection fill
+            sel_color = QColor("#3b82f6")
+            sel_color.setAlpha(80)
+            painter.fillRect(sel_x1, 0, sel_x2 - sel_x1, height, sel_color)
+            
+            # Dashed border
+            painter.setPen(QPen(QColor("#3b82f6"), 2, Qt.DashLine))
+            painter.drawRect(sel_x1, 0, sel_x2 - sel_x1, height)
+
     
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
@@ -184,6 +213,13 @@ class TimelineTrack(QWidget):
                     )
                     self.update()
                     return
+            
+            # Clicked empty space - start drag selection
+            self._selecting = True
+            self._selection_start = time
+            self._selection_end = time
+            self.update()
+            
         elif event.button() == Qt.RightButton:
             # Right-click to delete segment
             x = event.position().x()
@@ -194,11 +230,18 @@ class TimelineTrack(QWidget):
                 if seg.get('start', 0) <= time <= seg.get('end', 0):
                     self.segment_deleted.emit(seg)
                     return
+
                     
     def mouseMoveEvent(self, event: QMouseEvent):
         x = event.position().x()
         width = self.width()
         time = (x / width) * self.duration
+        
+        # Handle drag selection
+        if self._selecting:
+            self._selection_end = max(0, min(self.duration, time))
+            self.update()
+            return
         
         # Find hovered segment
         old_hovered = self.hovered_segment
@@ -223,10 +266,23 @@ class TimelineTrack(QWidget):
             
         if old_hovered != self.hovered_segment:
             self.update()
+    
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton and self._selecting and self._selection_start is not None:
+            start = min(self._selection_start, self._selection_end or 0)
+            end = max(self._selection_start, self._selection_end or 0)
+            
+            if end - start > 0.3:  # At least 0.3 seconds
+                self.region_selected.emit(start, end, self.category)
+            
+            # Keep selection visible until cleared by EditorTimelineWidget
+            self._selecting = False
+            self.update()
             
     def leaveEvent(self, event):
         self.hovered_segment = None
         self.update()
+
             
     def _format_time(self, seconds: float) -> str:
         m, s = divmod(int(seconds), 60)
