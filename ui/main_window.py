@@ -2084,6 +2084,7 @@ class MainWindow(QMainWindow):
         self.editor_panel = EditorPanel()
         self.editor_panel.export_requested.connect(self._on_editor_export)
         self.editor_panel.close_requested.connect(self._on_editor_closed)
+        self.editor_panel.edit_created.connect(self._on_edit_created)
         self.stack.addWidget(self.editor_panel)
         
         content.addWidget(self.stack, 1)
@@ -2539,6 +2540,13 @@ class MainWindow(QMainWindow):
         except Exception as e:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Error", f"Failed to open editor: {e}")
+    
+    def _on_edit_created(self, start: float, end: float, action_str: str):
+        """Handle edit created in timeline editor - mark covered detections."""
+        if hasattr(self, 'review_panel') and self.review_panel:
+            count = self.review_panel.mark_covered_by_edit(start, end)
+            if count > 0:
+                logging.info(f"Marked {count} detection(s) as covered by edit [{start:.2f}s - {end:.2f}s]")
     
     def _on_editor_export(self, project):
         """Handle export from editor."""

@@ -34,6 +34,8 @@ class EditorPanel(QFrame):
     
     export_requested = Signal(object)  # Emits ProjectFile
     close_requested = Signal()
+    edit_created = Signal(float, float, str)  # start, end, action - for syncing with detection browser
+
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -324,6 +326,9 @@ class EditorPanel(QFrame):
         self.timeline.set_edits(self._project.edits)
         self._update_undo_buttons()
         self._update_project_label()
+        
+        # Notify listeners (e.g., detection browser) about the new edit
+        self.edit_created.emit(start, end, action_str)
     
     def _on_snap_changed(self, state):
         self.timeline.set_snap_enabled(state == Qt.Checked)

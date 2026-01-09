@@ -1248,4 +1248,70 @@ class DetectionBrowserPanel(QFrame):
             if count > 0:
                 self.push_undo(f"Skip all visual ({count})", old_state)
         self._refresh_all_sections()
+    
+    def mark_covered_by_edit(self, start: float, end: float, category: str = None):
+        """Mark detections as handled when covered by a timeline edit.
+        
+        Args:
+            start: Edit start time in seconds
+            end: Edit end time in seconds
+            category: Optional category filter (e.g., 'nudity', 'profanity')
+                      If None, checks all categories
+        """
+        categories = [category] if category else list(self.data.keys())
+        covered_count = 0
+        
+        for track in categories:
+            if track not in self.data:
+                continue
+                
+            to_review = self.data.get(track, [])
+            to_delete = []
+            
+            for segment in to_review:
+                seg_start = segment.get('start', 0)
+                seg_end = segment.get('end', 0)
+                
+                # Check if edit covers this detection (any overlap)
+                if seg_start < end and seg_end > start:
+                    to_delete.append(segment)
+            
+            # Move covered segments to deleted
+            old_track = self.current_track
+            self.current_track = track
+            
+            for segment in to_delete:
+                segment['covered_by_edit'] = True  # Mark as handled by edit
+                self._on_delete(segment, refresh=False)
+                covered_count += 1
+            
+            self.current_track = old_track
+        
+        if covered_count > 0:
+            self._update_tab_counts()
+            self._refresh_all_sections()
+            
+        return covered_count
+    
+    def sync_with_edits(self, edits: list):
+        """Sync review list with a list of EditDecision objects.
+        
+        Args:
+            edits: List of EditDecision objects from the timeline editor
+        """
+        covered_count = 0
+        
+        for edit in edits:
+            # Map edit action to category if possible
+            # BLUR → nudity/sexual_content, MUTE → profanity
+            category = None  # Check all for now
+            
+            count = self.mark_covered_by_edit(
+                edit.source_start,
+                edit.source_end,
+                category
+            )
+            covered_count += count
+        
+        return covered_count
 
