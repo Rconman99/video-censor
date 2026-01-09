@@ -239,8 +239,17 @@ class DetectionBrowserPanel(QFrame):
         btn_confirm_high.setStyleSheet("background: #2a2a35; color: #a0a0b0; border: none; font-size: 10px; padding: 4px 8px; border-radius: 4px;")
         actions_bar.addWidget(btn_confirm_high)
         
+        # Skip false positive types (nudity track only)
+        self.btn_skip_fp = QPushButton("🧹 Skip False Positives")
+        self.btn_skip_fp.setToolTip("Skip MALE_GENITALIA, BUTTOCKS, ANUS (high false positive rate)")
+        self.btn_skip_fp.clicked.connect(self.skip_false_positive_types)
+        self.btn_skip_fp.setStyleSheet("background: #7c3aed; color: white; border: none; font-size: 10px; padding: 4px 8px; border-radius: 4px;")
+        self.btn_skip_fp.setVisible(False)  # Only show for nudity track
+        actions_bar.addWidget(self.btn_skip_fp)
+        
         actions_bar.addStretch()
         layout.addLayout(actions_bar)
+
         
         # Progress summary
         self.progress_summary = QLabel()
@@ -523,7 +532,12 @@ class DetectionBrowserPanel(QFrame):
         self.group_word_toggle.setVisible(track_key == 'profanity')
         self.group_by_word = self.group_word_toggle.isChecked() and track_key == 'profanity'
         
+        # Show Skip False Positives button only for nudity
+        if hasattr(self, 'btn_skip_fp'):
+            self.btn_skip_fp.setVisible(track_key == 'nudity')
+        
         self._refresh_all_sections()
+
         
     def _refresh_all_sections(self):
         """Rebuild all sections based on current state."""
@@ -1249,7 +1263,71 @@ class DetectionBrowserPanel(QFrame):
                 self.push_undo(f"Skip all visual ({count})", old_state)
         self._refresh_all_sections()
     
+    def skip_by_body_part(self, body_part: str):
+        """Skip all nudity detections of a specific body part type.
+        
+        Args:
+            body_part: e.g., 'MALE_GENITALIA_EXPOSED', 'BUTTOCKS_EXPOSED'
+        """
+        if self.current_track != 'nudity':
+            return
+            
+        old_state = self._get_state_snapshot()
+        to_review = self.data.get('nudity', [])
+        to_skip = []
+        
+        for segment in to_review:
+            reason = segment.get('reason', '')
+            if body_part in reason:
+                to_skip.append(segment)
+        
+        for s in to_skip:
+            self._on_delete(s, refresh=False)
+        
+        if to_skip:
+            self.push_undo(f"Skip {body_part} ({len(to_skip)})", old_state)
+        self._refresh_all_sections()
+    
+    def skip_male_genitalia(self):
+        """Skip all MALE_GENITALIA_EXPOSED detections (high false positive rate)."""
+        self.skip_by_body_part('MALE_GENITALIA_EXPOSED')
+    
+    def skip_buttocks(self):
+        """Skip all BUTTOCKS_EXPOSED detections (often triggers on clothing)."""
+        self.skip_by_body_part('BUTTOCKS_EXPOSED')
+    
+    def skip_anus(self):
+        """Skip all ANUS_EXPOSED detections."""
+        self.skip_by_body_part('ANUS_EXPOSED')
+    
+    def skip_false_positive_types(self):
+        """Skip all high false positive nudity types at once."""
+        if self.current_track != 'nudity':
+            return
+            
+        old_state = self._get_state_snapshot()
+        to_review = self.data.get('nudity', [])
+        to_skip = []
+        
+        # These body parts have high false positive rates
+        false_positive_types = ['MALE_GENITALIA_EXPOSED', 'BUTTOCKS_EXPOSED', 'ANUS_EXPOSED']
+        
+        for segment in to_review:
+            reason = segment.get('reason', '')
+            for fp_type in false_positive_types:
+                if fp_type in reason:
+                    to_skip.append(segment)
+                    break
+        
+        for s in to_skip:
+            self._on_delete(s, refresh=False)
+        
+        if to_skip:
+            self.push_undo(f"Skip false positive types ({len(to_skip)})", old_state)
+        self._refresh_all_sections()
+
     def mark_covered_by_edit(self, start: float, end: float, category: str = None):
+
         """Mark detections as handled when covered by a timeline edit.
         
         Args:
