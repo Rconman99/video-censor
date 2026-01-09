@@ -481,7 +481,12 @@ class DetectionBrowserPanel(QFrame):
     def set_data(self, data: dict, video_path: str = None):
         """Set detection data and refresh sections."""
         self.data = data
+        
+        # Reset hover preview when switching videos
+        if video_path != self.video_path:
+            self.hover_preview.reset_video()
         self.video_path = video_path
+        
         self.kept = {}
         self.deleted = {}
         self.selected_segments.clear()

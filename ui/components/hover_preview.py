@@ -92,6 +92,12 @@ class HoverPreview(QWidget):
         self.media_player.setPosition(0)
         self.hide()
     
+    def reset_video(self):
+        """Reset to clear cached video - call when switching videos."""
+        self.stop_preview()
+        self.current_video_path = None
+        self.media_player.setSource(QUrl())  # Clear source
+    
     def hideEvent(self, event):
         """Ensure media stops when widget is hidden."""
         self.loop_timer.stop()
