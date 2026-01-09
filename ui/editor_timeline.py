@@ -14,9 +14,18 @@ from PySide6.QtGui import (
 )
 from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
+from enum import Enum
 
 from .timeline import TimelineWidget, TimelineTrack, TimeRuler
 from video_censor.editing.intervals import EditDecision, Action
+
+
+class HitZone(Enum):
+    """Hit testing zones for segment interaction."""
+    NONE = 0
+    LEFT_HANDLE = 1
+    RIGHT_HANDLE = 2
+    BODY = 3
 
 
 @dataclass
@@ -40,10 +49,17 @@ class SelectionRange:
 
 
 class EditsLaneWidget(QWidget):
-    """Widget showing finalized edit decisions."""
+    """Widget showing finalized edit decisions with drag/resize interaction."""
     
+    # Signals for edit interaction
     edit_clicked = Signal(object)  # Emits EditDecision
     edit_double_clicked = Signal(object)  # For editing
+    segment_changed = Signal(str, float, float)  # id, new_start, new_end
+    segment_selected = Signal(str)  # id
+    selection_cleared = Signal()
+    create_manual_edit = Signal(float, float)  # start, end for new segment
+    
+    HANDLE_WIDTH = 8  # pixels - drag zone for resize handles
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -54,6 +70,18 @@ class EditsLaneWidget(QWidget):
         self.setFixedHeight(40)
         self.setMouseTracking(True)
         
+        # Interaction state
+        self._drag_mode = None  # 'resize_left', 'resize_right', 'move', 'select_region'
+        self._drag_edit: Optional[EditDecision] = None
+        self._drag_start_pos: Optional[QPoint] = None
+        self._drag_start_time = 0.0  # Original segment times before drag
+        self._drag_end_time = 0.0
+        self._selected_edits: set = set()
+        
+        # For drag-to-select region
+        self._selection_start: Optional[float] = None
+        self._selection_end: Optional[float] = None
+        
         # Action colors
         self.action_colors = {
             Action.CUT: QColor("#ef4444"),      # Red
@@ -62,6 +90,9 @@ class EditsLaneWidget(QWidget):
             Action.BLUR: QColor("#a855f7"),     # Purple
             Action.NONE: QColor("#71717a"),     # Gray
         }
+        
+        # Edit rendering offset (after label)
+        self._edit_start_x = 60
     
     def set_duration(self, duration: float):
         self.duration = max(0.1, duration)
@@ -73,6 +104,145 @@ class EditsLaneWidget(QWidget):
     
     def set_playhead(self, position_sec: float):
         self.playhead_pos = position_sec
+        self.update()
+    
+    def _time_to_x(self, time_sec: float) -> int:
+        """Convert time to pixel X coordinate."""
+        if self.duration <= 0:
+            return self._edit_start_x
+        edit_width = self.width() - self._edit_start_x - 5
+        return int(self._edit_start_x + (time_sec / self.duration) * edit_width)
+    
+    def _x_to_time(self, x: int) -> float:
+        """Convert pixel X to time in seconds."""
+        edit_width = self.width() - self._edit_start_x - 5
+        if edit_width <= 0:
+            return 0.0
+        return ((x - self._edit_start_x) / edit_width) * self.duration
+    
+    def _hit_test(self, pos: QPoint) -> tuple:
+        """Determine what edit/zone the mouse is over. Returns (EditDecision or None, HitZone)."""
+        for edit in self.edits:
+            if edit.is_provisional:
+                continue
+            
+            left_x = self._time_to_x(edit.source_start)
+            right_x = self._time_to_x(edit.source_end)
+            
+            # Check handle zones first (they take priority)
+            if abs(pos.x() - left_x) <= self.HANDLE_WIDTH:
+                return edit, HitZone.LEFT_HANDLE
+            if abs(pos.x() - right_x) <= self.HANDLE_WIDTH:
+                return edit, HitZone.RIGHT_HANDLE
+            if left_x < pos.x() < right_x:
+                return edit, HitZone.BODY
+        
+        return None, HitZone.NONE
+    
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() != Qt.LeftButton:
+            return super().mousePressEvent(event)
+        
+        edit, zone = self._hit_test(event.pos())
+        
+        if edit:
+            self._drag_edit = edit
+            self._drag_start_pos = event.pos()
+            self._drag_start_time = edit.source_start
+            self._drag_end_time = edit.source_end
+            
+            if zone == HitZone.LEFT_HANDLE:
+                self._drag_mode = 'resize_left'
+                self.setCursor(Qt.SizeHorCursor)
+            elif zone == HitZone.RIGHT_HANDLE:
+                self._drag_mode = 'resize_right'
+                self.setCursor(Qt.SizeHorCursor)
+            elif zone == HitZone.BODY:
+                self._drag_mode = 'move'
+                self.setCursor(Qt.ClosedHandCursor)
+                
+            # Select this edit
+            if not (event.modifiers() & Qt.ControlModifier):
+                self._selected_edits.clear()
+            self._selected_edits.add(id(edit))
+            self.segment_selected.emit(str(id(edit)))
+        else:
+            # Clicked empty space - start region selection
+            self._drag_mode = 'select_region'
+            self._selection_start = self._x_to_time(event.pos().x())
+            self._selection_end = self._selection_start
+            self._selected_edits.clear()
+            self.selection_cleared.emit()
+        
+        self.update()
+    
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self._drag_mode is None:
+            # Just hovering - update cursor
+            _, zone = self._hit_test(event.pos())
+            if zone in (HitZone.LEFT_HANDLE, HitZone.RIGHT_HANDLE):
+                self.setCursor(Qt.SizeHorCursor)
+            elif zone == HitZone.BODY:
+                self.setCursor(Qt.OpenHandCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
+            return
+        
+        current_time = self._x_to_time(event.pos().x())
+        edit = self._drag_edit
+        
+        if self._drag_mode == 'resize_left' and edit:
+            # Don't let left edge go past right edge
+            new_start = min(current_time, edit.source_end - 0.1)
+            new_start = max(0, new_start)  # Clamp to video bounds
+            edit.source_start = new_start
+            self.segment_changed.emit(str(id(edit)), edit.source_start, edit.source_end)
+            
+        elif self._drag_mode == 'resize_right' and edit:
+            # Don't let right edge go past left edge
+            new_end = max(current_time, edit.source_start + 0.1)
+            new_end = min(self.duration, new_end)  # Clamp to video bounds
+            edit.source_end = new_end
+            self.segment_changed.emit(str(id(edit)), edit.source_start, edit.source_end)
+            
+        elif self._drag_mode == 'move' and edit:
+            # Move whole segment
+            delta_time = current_time - self._x_to_time(self._drag_start_pos.x())
+            duration = self._drag_end_time - self._drag_start_time
+            
+            new_start = self._drag_start_time + delta_time
+            new_end = self._drag_end_time + delta_time
+            
+            # Clamp to video bounds
+            if new_start < 0:
+                new_start = 0
+                new_end = duration
+            if new_end > self.duration:
+                new_end = self.duration
+                new_start = self.duration - duration
+            
+            edit.source_start = new_start
+            edit.source_end = new_end
+            self.segment_changed.emit(str(id(edit)), edit.source_start, edit.source_end)
+            
+        elif self._drag_mode == 'select_region':
+            self._selection_end = max(0, min(self.duration, current_time))
+        
+        self.update()
+    
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if self._drag_mode == 'select_region' and self._selection_start is not None:
+            # Create new edit segment from selection if significant
+            sel_start = min(self._selection_start, self._selection_end or 0)
+            sel_end = max(self._selection_start, self._selection_end or 0)
+            if sel_end - sel_start > 0.5:  # At least 0.5 seconds
+                self.create_manual_edit.emit(sel_start, sel_end)
+        
+        self._drag_mode = None
+        self._drag_edit = None
+        self._selection_start = None
+        self._selection_end = None
+        self.setCursor(Qt.ArrowCursor)
         self.update()
     
     def paintEvent(self, event):
@@ -95,23 +265,34 @@ class EditsLaneWidget(QWidget):
         painter.setPen(QColor("#71717a"))
         painter.drawText(5, height // 2 + 4, "✂️ Edits")
         
-        # Edit rendering starts after label
-        edit_start_x = 60
-        edit_width = width - edit_start_x - 5
+        edit_width = width - self._edit_start_x - 5
+        
+        # Draw region selection if active
+        if self._selection_start is not None and self._selection_end is not None:
+            sel_x1 = self._time_to_x(min(self._selection_start, self._selection_end))
+            sel_x2 = self._time_to_x(max(self._selection_start, self._selection_end))
+            sel_color = QColor("#3b82f6")
+            sel_color.setAlpha(60)
+            painter.fillRect(QRectF(sel_x1, 4, sel_x2 - sel_x1, height - 8), sel_color)
+            painter.setPen(QPen(QColor("#3b82f6"), 1, Qt.DashLine))
+            painter.drawRect(QRectF(sel_x1, 4, sel_x2 - sel_x1, height - 8))
         
         # Draw edits
         for edit in self.edits:
             if edit.is_provisional:
                 continue  # Don't draw provisional edits here
                 
-            x1 = edit_start_x + (edit.source_start / self.duration) * edit_width
-            x2 = edit_start_x + (edit.source_end / self.duration) * edit_width
+            x1 = self._time_to_x(edit.source_start)
+            x2 = self._time_to_x(edit.source_end)
             w = max(4, x2 - x1)
             
             color = self.action_colors.get(edit.action, QColor("#71717a"))
+            is_selected = id(edit) in self._selected_edits
             is_hovered = edit == self.hovered_edit
             
-            if is_hovered:
+            if is_selected:
+                color = color.lighter(140)
+            elif is_hovered:
                 color = color.lighter(120)
             
             # Draw edit block
@@ -119,6 +300,22 @@ class EditsLaneWidget(QWidget):
             painter.setBrush(color)
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(rect, 3, 3)
+            
+            # Selection border
+            if is_selected:
+                painter.setPen(QPen(QColor("#ffffff"), 2))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRoundedRect(rect, 3, 3)
+            
+            # Draw resize handles on selected edit
+            if is_selected:
+                handle_color = QColor("#ffffff")
+                painter.setBrush(handle_color)
+                painter.setPen(QPen(color.darker(120), 1))
+                # Left handle
+                painter.drawRect(QRectF(x1 - 2, height/2 - 8, 4, 16))
+                # Right handle
+                painter.drawRect(QRectF(x2 - 2, height/2 - 8, 4, 16))
             
             # Action icon
             if w > 20:
@@ -128,7 +325,7 @@ class EditsLaneWidget(QWidget):
         
         # Draw playhead
         if self.playhead_pos > 0:
-            playhead_x = edit_start_x + (self.playhead_pos / self.duration) * edit_width
+            playhead_x = self._time_to_x(self.playhead_pos)
             painter.setPen(QPen(QColor("#3b82f6"), 2))
             painter.drawLine(int(playhead_x), 0, int(playhead_x), height)
 
