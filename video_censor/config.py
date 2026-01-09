@@ -92,22 +92,23 @@ class ProfanityConfig:
 @dataclass
 class NudityConfig:
     """Configuration for nudity detection."""
-    threshold: float = 0.75  # Raised from 0.6 to reduce false positives
+    # RAISED from 0.75 to 0.88 to drastically reduce false positives
+    threshold: float = 0.88
     frame_interval: float = 0.25
     min_segment_duration: float = 0.5
     buffer_before: float = 0.25
     buffer_after: float = 0.25
     merge_gap: float = 0.5
-    # Body part filtering - list of body parts to detect
+    # Body part filtering - ONLY detect truly explicit nudity
     # Available: FEMALE_BREAST_EXPOSED, FEMALE_GENITALIA_EXPOSED,
     #            MALE_GENITALIA_EXPOSED, BUTTOCKS_EXPOSED, ANUS_EXPOSED
-    # Leave empty to detect all exposed body parts
-    body_parts: list = None  # Will default to all exposed parts
+    # By default only detect genitalia and exposed breasts (excludes buttocks which has many false positives)
+    body_parts: list = None  # See __post_init__ for default
     # Minimum duration for a cut to be applied (prevents micro-cuts)
     min_cut_duration: float = 0.3
-    # False positive reduction filters
-    min_box_area_percent: float = 3.0  # Minimum detection box area as % of frame
-    max_aspect_ratio: float = 4.0  # Maximum allowed aspect ratio (rejects extreme shapes)
+    # False positive reduction filters - STRICTER values
+    min_box_area_percent: float = 5.0  # RAISED from 3.0 - reject small/distant detections
+    max_aspect_ratio: float = 3.5  # LOWERED from 4.0 - reject extreme shapes
     # Scene grouping for review - merge detections within this gap into one scene
     scene_gap: float = 5.0  # Seconds between detections to group as one scene
     # Adaptive sampling - sample more frequently during scene changes
@@ -115,7 +116,14 @@ class NudityConfig:
 
     def __post_init__(self):
         if self.body_parts is None:
-            self.body_parts = []  # Empty means all
+            # DEFAULT: Only truly explicit nudity (excludes BUTTOCKS_EXPOSED which has many false positives)
+            self.body_parts = [
+                'FEMALE_BREAST_EXPOSED',
+                'FEMALE_GENITALIA_EXPOSED',
+                'MALE_GENITALIA_EXPOSED',
+                'ANUS_EXPOSED'
+            ]
+
 
 
 @dataclass
