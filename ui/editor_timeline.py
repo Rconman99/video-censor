@@ -628,9 +628,11 @@ class EditorTimelineWidget(TimelineWidget):
         # Insert after ruler (index 1)
         layout.insertWidget(2, self.edits_lane)
         
-        # Selection overlay (covers tracks area)
+        # Selection overlay (covers tracks area) - must be on top
         self.selection_overlay = SelectionOverlayWidget(self.tracks_container)
         self.selection_overlay.selection_changed.connect(self._on_selection_changed)
+        self.selection_overlay.selection_finalized.connect(self._on_selection_finalized)
+        self.selection_overlay.raise_()  # Bring to front of tracks_container
         
         # Quick action buttons (hidden until selection made)
         self._create_action_buttons()
@@ -639,6 +641,7 @@ class EditorTimelineWidget(TimelineWidget):
         self._edits: List[EditDecision] = []
         self._snap_enabled = True
         self._snap_threshold = 0.5
+
     
     def _create_action_buttons(self):
         """Create quick action buttons bar."""
@@ -714,9 +717,10 @@ class EditorTimelineWidget(TimelineWidget):
     
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Keep selection overlay sized to tracks container
+        # Keep selection overlay sized to tracks container and on top
         if hasattr(self, 'selection_overlay'):
             self.selection_overlay.setGeometry(self.tracks_container.geometry())
+            self.selection_overlay.raise_()  # Keep on top of tracks
     
     def set_data(self, duration: float, data: dict):
         """Load detection data and update all components."""
@@ -754,12 +758,36 @@ class EditorTimelineWidget(TimelineWidget):
         self.actions_bar.setVisible(True)
         self.selection_created.emit(start, end)
     
+    def _on_selection_finalized(self, start: float, end: float):
+        """Handle selection finalized (mouse released)."""
+        # Keep actions bar visible for user to choose action
+        self.actions_bar.setVisible(True)
+    
     def _apply_action(self, action: Action):
-        """Apply an action to the current selection."""
+        """Apply an action to the current selection, creating an edit."""
         if not self.selection_overlay.selection:
             return
         
         sel = self.selection_overlay.selection
+        
+        # Create the edit
+        edit = EditDecision(
+            source_start=sel.normalized_start,
+            source_end=sel.normalized_end,
+            action=action,
+            is_provisional=False
+        )
+        
+        self._edits.append(edit)
+        self.edits_lane.set_edits(self._edits)
+        
+        # Select the new edit
+        self.edits_lane._selected_edits.clear()
+        self.edits_lane._selected_edits.add(id(edit))
+        self.edits_lane.setFocus()
+        self.edits_lane.update()
+        
+        # Emit signal for external listeners
         self.edit_action_requested.emit(
             action.value,
             sel.normalized_start,
@@ -768,6 +796,7 @@ class EditorTimelineWidget(TimelineWidget):
         
         # Clear selection after action
         self._cancel_selection()
+
     
     def _cancel_selection(self):
         """Clear the current selection."""
