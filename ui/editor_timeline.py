@@ -58,6 +58,7 @@ class EditsLaneWidget(QWidget):
     segment_selected = Signal(str)  # id
     selection_cleared = Signal()
     create_manual_edit = Signal(float, float)  # start, end for new segment
+    edit_deleted = Signal(object)  # Emits deleted EditDecision
     
     HANDLE_WIDTH = 8  # pixels - drag zone for resize handles
     
@@ -69,6 +70,7 @@ class EditsLaneWidget(QWidget):
         self.playhead_pos = 0.0
         self.setFixedHeight(40)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)  # Enable keyboard focus
         
         # Interaction state
         self._drag_mode = None  # 'resize_left', 'resize_right', 'move', 'select_region'
@@ -140,8 +142,10 @@ class EditsLaneWidget(QWidget):
         return None, HitZone.NONE
     
     def mousePressEvent(self, event: QMouseEvent):
+        self.setFocus()  # Grab keyboard focus on click
         if event.button() != Qt.LeftButton:
             return super().mousePressEvent(event)
+
         
         edit, zone = self._hit_test(event.pos())
         
@@ -245,7 +249,40 @@ class EditsLaneWidget(QWidget):
         self.setCursor(Qt.ArrowCursor)
         self.update()
     
+    def keyPressEvent(self, event):
+        """Handle keyboard events for edit manipulation."""
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            # Delete selected edits
+            to_delete = []
+            for edit in self.edits:
+                if id(edit) in self._selected_edits:
+                    to_delete.append(edit)
+            
+            for edit in to_delete:
+                self.edits.remove(edit)
+                self.edit_deleted.emit(edit)
+            
+            self._selected_edits.clear()
+            self.update()
+        
+        elif event.key() == Qt.Key_Escape:
+            # Clear selection
+            self._selected_edits.clear()
+            self._selection_start = None
+            self._selection_end = None
+            self.selection_cleared.emit()
+            self.update()
+        
+        elif event.key() == Qt.Key_A and event.modifiers() & Qt.ControlModifier:
+            # Select all edits
+            self._selected_edits = {id(edit) for edit in self.edits if not edit.is_provisional}
+            self.update()
+        
+        else:
+            super().keyPressEvent(event)
+    
     def paintEvent(self, event):
+
         if self.duration <= 0:
             return
             
@@ -688,6 +725,10 @@ class EditorTimelineWidget(TimelineWidget):
                     markers.append(seg.get('end', 0))
         
         self.selection_overlay.set_snap_markers(markers)
+        
+        # Connect detection track clicks to edit creation
+        self._connect_track_signals()
+
     
     def set_edits(self, edits: List[EditDecision]):
         """Set the edit decisions to display."""
@@ -733,3 +774,41 @@ class EditorTimelineWidget(TimelineWidget):
         """Set snap threshold in seconds."""
         self._snap_threshold = threshold
         self.selection_overlay.snap_threshold = threshold
+    
+    def _connect_track_signals(self):
+        """Connect detection track clicks to edit creation."""
+        from .timeline import TimelineTrack
+        for track in self.findChildren(TimelineTrack):
+            # Disconnect any existing to avoid duplicates
+            try:
+                track.detection_clicked.disconnect(self._on_detection_clicked)
+            except:
+                pass
+            track.detection_clicked.connect(self._on_detection_clicked)
+    
+    def _on_detection_clicked(self, start: float, end: float, category: str):
+        """Create an edit from a clicked detection."""
+        import uuid
+        
+        # Determine default action based on category
+        if category in ('nudity', 'sexual_content'):
+            action = Action.BLUR
+        else:
+            action = Action.MUTE
+        
+        # Create new edit
+        edit = EditDecision(
+            source_start=start,
+            source_end=end,
+            action=action,
+            is_provisional=False
+        )
+        
+        self._edits.append(edit)
+        self.edits_lane.set_edits(self._edits)
+        
+        # Select the new edit
+        self.edits_lane._selected_edits.clear()
+        self.edits_lane._selected_edits.add(id(edit))
+        self.edits_lane.setFocus()
+        self.edits_lane.update()
