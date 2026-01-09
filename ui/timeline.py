@@ -80,10 +80,12 @@ class TimelineTrack(QWidget):
     
     segment_clicked = Signal(object)  # Emits segment data
     segment_deleted = Signal(object)  # Emits segment to delete
+    detection_clicked = Signal(float, float, str)  # start, end, category - for creating edits
     
-    def __init__(self, title: str, color: QColor, duration: float, segments: list, parent=None):
+    def __init__(self, title: str, color: QColor, duration: float, segments: list, category: str = None, parent=None):
         super().__init__(parent)
         self.track_title = title
+        self.category = category or title.lower().replace(' ', '_')  # 'nudity', 'profanity', etc.
         self.base_color = color
         self.duration = max(0.1, duration)
         self.segments = segments
@@ -174,6 +176,12 @@ class TimelineTrack(QWidget):
             for seg in self.segments:
                 if seg.get('start', 0) <= time <= seg.get('end', 0):
                     self.segment_clicked.emit(seg)
+                    # Also emit detection_clicked for creating edits
+                    self.detection_clicked.emit(
+                        seg.get('start', 0),
+                        seg.get('end', 0),
+                        self.category
+                    )
                     self.update()
                     return
         elif event.button() == Qt.RightButton:
@@ -324,9 +332,9 @@ class TimelineWidget(QWidget):
         
         for title, color, key in track_config:
             if data.get(key):
-                self._add_track(title, color, data[key])
+                self._add_track(title, color, data[key], category_key=key)
             
-    def _add_track(self, title: str, color_hex: str, segments: list):
+    def _add_track(self, title: str, color_hex: str, segments: list, category_key: str = None):
         # Container for label + track
         row = QWidget()
         row_layout = QHBoxLayout(row)
@@ -339,8 +347,8 @@ class TimelineWidget(QWidget):
         lbl.setStyleSheet("color: #a1a1aa; font-size: 11px; font-weight: bold;")
         row_layout.addWidget(lbl)
         
-        # Track
-        track = TimelineTrack(title, QColor(color_hex), self.duration, segments)
+        # Track - pass category_key for detection_clicked signal
+        track = TimelineTrack(title, QColor(color_hex), self.duration, segments, category=category_key)
         track.segment_clicked.connect(self._on_segment_clicked)
         track.segment_deleted.connect(self._on_segment_deleted)
         row_layout.addWidget(track, 1)
