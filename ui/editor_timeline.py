@@ -338,21 +338,30 @@ class EditsLaneWidget(QWidget):
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(rect, 3, 3)
             
-            # Selection border
+            # Selection glow and handles
             if is_selected:
+                # Outer glow
+                glow_rect = rect.adjusted(-3, -3, 3, 3)
+                glow_color = QColor("#3b82f6")
+                glow_color.setAlpha(100)
+                painter.setBrush(glow_color)
+                painter.setPen(Qt.NoPen)
+                painter.drawRoundedRect(glow_rect, 5, 5)
+                
+                # White border
                 painter.setPen(QPen(QColor("#ffffff"), 2))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRoundedRect(rect, 3, 3)
-            
-            # Draw resize handles on selected edit
-            if is_selected:
+                
+                # Larger, more visible pill-shaped handles
                 handle_color = QColor("#ffffff")
                 painter.setBrush(handle_color)
-                painter.setPen(QPen(color.darker(120), 1))
-                # Left handle
-                painter.drawRect(QRectF(x1 - 2, height/2 - 8, 4, 16))
-                # Right handle
-                painter.drawRect(QRectF(x2 - 2, height/2 - 8, 4, 16))
+                painter.setPen(QPen(QColor("#3b82f6"), 2))
+                
+                # Left handle - pill shape (full height)
+                painter.drawRoundedRect(QRectF(x1 - 4, 4, 8, height - 8), 3, 3)
+                # Right handle - pill shape (full height)
+                painter.drawRoundedRect(QRectF(x2 - 4, 4, 8, height - 8), 3, 3)
             
             # Action icon
             if w > 20:
