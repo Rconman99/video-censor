@@ -92,23 +92,25 @@ class ProfanityConfig:
 @dataclass
 class NudityConfig:
     """Configuration for nudity detection."""
-    # RAISED from 0.75 to 0.88 to drastically reduce false positives
-    threshold: float = 0.88
+    # RAISED to 0.92 to drastically reduce false positives
+    # NudeNet has high false positive rate on hands, faces, etc.
+    threshold: float = 0.92
     frame_interval: float = 0.25
     min_segment_duration: float = 0.5
     buffer_before: float = 0.25
     buffer_after: float = 0.25
     merge_gap: float = 0.5
-    # Body part filtering - ONLY detect truly explicit nudity
+    # Body part filtering - VERY STRICT defaults
     # Available: FEMALE_BREAST_EXPOSED, FEMALE_GENITALIA_EXPOSED,
     #            MALE_GENITALIA_EXPOSED, BUTTOCKS_EXPOSED, ANUS_EXPOSED
-    # By default only detect genitalia and exposed breasts (excludes buttocks which has many false positives)
+    # MALE_GENITALIA_EXPOSED removed - too many false positives (hands, etc.)
+    # BUTTOCKS_EXPOSED removed - triggers on clothing
     body_parts: list = None  # See __post_init__ for default
     # Minimum duration for a cut to be applied (prevents micro-cuts)
     min_cut_duration: float = 0.3
-    # False positive reduction filters - STRICTER values
-    min_box_area_percent: float = 5.0  # RAISED from 3.0 - reject small/distant detections
-    max_aspect_ratio: float = 3.5  # LOWERED from 4.0 - reject extreme shapes
+    # False positive reduction filters - STRICT values
+    min_box_area_percent: float = 5.0  # Reject small/distant detections
+    max_aspect_ratio: float = 3.5  # Reject extreme shapes
     # Scene grouping for review - merge detections within this gap into one scene
     scene_gap: float = 5.0  # Seconds between detections to group as one scene
     # Adaptive sampling - sample more frequently during scene changes
@@ -116,14 +118,12 @@ class NudityConfig:
 
     def __post_init__(self):
         if self.body_parts is None:
-            # DEFAULT: Only truly explicit nudity (excludes BUTTOCKS_EXPOSED which has many false positives)
+            # VERY STRICT: Only detect female nudity (male genitalia has too many false positives)
+            # User can add 'MALE_GENITALIA_EXPOSED' if needed for specific content
             self.body_parts = [
                 'FEMALE_BREAST_EXPOSED',
                 'FEMALE_GENITALIA_EXPOSED',
-                'MALE_GENITALIA_EXPOSED',
-                'ANUS_EXPOSED'
             ]
-
 
 
 @dataclass
