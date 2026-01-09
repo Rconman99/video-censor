@@ -92,17 +92,23 @@ class ProfanityConfig:
 @dataclass
 class NudityConfig:
     """Configuration for nudity detection."""
-    # RAISED to 0.92 to drastically reduce false positives
-    # NudeNet has high false positive rate on hands, faces, etc.
-    threshold: float = 0.92
+    # Engine to use: 'precision' (ViT+YOLOv11), 'yolo' (YOLOv11), or 'nudenet'
+    # 'precision' is recommended for lowest false positives.
+    engine: str = "precision"
+    
+    # Confidence threshold for flagging nudity.
+    # 0.6 is a good balance for the Precision/YOLO engines.
+    threshold: float = 0.60
     frame_interval: float = 0.25
     min_segment_duration: float = 0.5
     buffer_before: float = 0.25
     buffer_after: float = 0.25
     merge_gap: float = 0.5
+
     # Body part filtering - VERY STRICT defaults
     # Available: FEMALE_BREAST_EXPOSED, FEMALE_GENITALIA_EXPOSED,
-    #            MALE_GENITALIA_EXPOSED, BUTTOCKS_EXPOSED, ANUS_EXPOSED
+    #            MALE_GENITALIA_EXPOSED, BUTTOCKS_EXPOSED, ANUS_EXPOSED,
+    #            SEXUAL_ACTIVITY
     # MALE_GENITALIA_EXPOSED removed - too many false positives (hands, etc.)
     # BUTTOCKS_EXPOSED removed - triggers on clothing
     body_parts: list = None  # See __post_init__ for default
@@ -116,6 +122,7 @@ class NudityConfig:
     # Adaptive sampling - sample more frequently during scene changes
     adaptive_sampling: bool = False  # Enable smart frame sampling
 
+
     def __post_init__(self):
         if self.body_parts is None:
             # VERY STRICT: Only detect female nudity (male genitalia has too many false positives)
@@ -123,7 +130,9 @@ class NudityConfig:
             self.body_parts = [
                 'FEMALE_BREAST_EXPOSED',
                 'FEMALE_GENITALIA_EXPOSED',
+                'SEXUAL_ACTIVITY'
             ]
+
 
 
 @dataclass

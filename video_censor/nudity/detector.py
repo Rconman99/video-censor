@@ -17,7 +17,7 @@ from ..editing.intervals import TimeInterval
 logger = logging.getLogger(__name__)
 
 
-# NudeNet detection labels that indicate nudity
+# Nudity detection labels that indicate nudity
 NUDITY_LABELS = {
     'FEMALE_BREAST_EXPOSED',
     'FEMALE_GENITALIA_EXPOSED', 
@@ -26,6 +26,7 @@ NUDITY_LABELS = {
     'ANUS_EXPOSED',
     'FEMALE_BREAST_COVERED',  # Optional - can be configured
     'BELLY_EXPOSED',  # Optional - less severe
+    'SEXUAL_ACTIVITY',  # Added for YOLO v11 support
 }
 
 # Labels that definitely indicate nudity (high confidence)
@@ -35,7 +36,9 @@ DEFINITE_NUDITY_LABELS = {
     'MALE_GENITALIA_EXPOSED',
     'BUTTOCKS_EXPOSED',
     'ANUS_EXPOSED',
+    'SEXUAL_ACTIVITY',
 }
+
 
 
 @dataclass
@@ -46,79 +49,85 @@ class NudityDetection:
     max_score: float
     labels_found: List[str]
     is_nude: bool
+    engine: str = "unknown"
 
 
 class NudityDetector:
     """
-    Wrapper for NudeNet detector.
+    Coordinator for nudity detection engines.
     
-    Handles model loading and frame analysis.
+    Supports:
+    - 'precision' (Default): ViT Classifier + YOLOv11 Detector
+    - 'yolo': YOLOv11 Detector only
+    - 'nudenet': Original NudeNet detector
     """
     
-    def __init__(self):
-        self._detector = None
+    def __init__(self, engine: str = "precision"):
+        self.engine = engine
+        self._nudenet = None
+        self._yolo = None
+        self._classifier = None
     
-    def _load_model(self) -> None:
-        """Load the NudeNet detector model."""
-        if self._detector is not None:
-            return
+    def _load_engine(self) -> None:
+        """Load the required models based on engine type."""
+        if self.engine == "precision":
+            from .classifier import get_classifier
+            from .yolo_detector import get_yolo_detector
+            self._classifier = get_classifier()
+            self._yolo = get_yolo_detector()
+            logger.info("Using Precision (ViT + YOLOv11) nudity engine")
             
-        logger.info("Loading NudeNet detector model...")
-        
-        try:
-            # Try to configure ONNX Runtime for Apple Silicon acceleration
+        elif self.engine == "yolo":
+            from .yolo_detector import get_yolo_detector
+            self._yolo = get_yolo_detector()
+            logger.info("Using YOLOv11 nudity engine")
+            
+        else: # nudenet
+            logger.info("Loading NudeNet detector model...")
             try:
-                import onnxruntime as ort
-                available_providers = ort.get_available_providers()
-                logger.info(f"Available ONNX providers: {available_providers}")
-                
-                # Prefer CoreML on macOS, then CUDA, then CPU
-                if 'CoreMLExecutionProvider' in available_providers:
-                    logger.info("Using CoreML provider for GPU acceleration")
-                elif 'CUDAExecutionProvider' in available_providers:
-                    logger.info("Using CUDA provider for GPU acceleration")
-                else:
-                    logger.info("Using CPU provider")
+                from nudenet import NudeDetector as NNDetector
+                self._nudenet = NNDetector()
+                logger.info("NudeNet model loaded successfully")
             except ImportError:
-                pass  # onnxruntime not installed, nudenet will use defaults
-            
-            from nudenet import NudeDetector as NNDetector
-            self._detector = NNDetector()
-            logger.info("NudeNet model loaded successfully")
-        except ImportError:
-            raise RuntimeError(
-                "NudeNet not installed. Run: pip install nudenet"
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to load NudeNet: {e}")
-    
+                raise RuntimeError("NudeNet not installed. Run: pip install nudenet")
+
     def detect_frame(self, frame_path: Path) -> List[Dict[str, Any]]:
-        """
-        Run nudity detection on a single frame.
-        
-        Returns list of detections with format:
-        [{'class': 'LABEL', 'score': 0.95, 'box': [x1, y1, x2, y2]}]
-        """
-        self._load_model()
-        
-        try:
-            detections = self._detector.detect(str(frame_path))
-            return detections
-        except Exception as e:
-            logger.warning(f"Failed to analyze frame {frame_path}: {e}")
-            return []
+        """Run detection using the selected engine."""
+        if self.engine == "precision":
+            # Stage 1: Fast classification
+            if self._classifier is None: self._load_engine()
+            
+            # If classifier says safe with high confidence, skip heavy detection
+            # threshold 0.2 means very sensitive (only skip if < 20% nsfw)
+            if self._classifier.is_safe(frame_path, nsfw_threshold=0.2):
+                return []
+                
+            # Stage 2: Precise object detection
+            return self._yolo.detect_frame(frame_path)
+            
+        elif self.engine == "yolo":
+            if self._yolo is None: self._load_engine()
+            return self._yolo.detect_frame(frame_path)
+            
+        else: # nudenet
+            if self._nudenet is None: self._load_engine()
+            try:
+                detections = self._nudenet.detect(str(frame_path))
+                return detections
+            except Exception as e:
+                logger.warning(f"Failed to analyze frame {frame_path}: {e}")
+                return []
 
 
 # Global detector instance (lazy loaded)
-_detector: Optional[NudityDetector] = None
+_detector_map: Dict[str, NudityDetector] = {}
 
 
-def get_detector() -> NudityDetector:
-    """Get or create the global NudityDetector instance."""
-    global _detector
-    if _detector is None:
-        _detector = NudityDetector()
-    return _detector
+def get_detector(engine: str = "precision") -> NudityDetector:
+    """Get or create a NudityDetector for the specified engine."""
+    if engine not in _detector_map:
+        _detector_map[engine] = NudityDetector(engine)
+    return _detector_map[engine]
 
 
 def analyze_frame(
@@ -129,40 +138,38 @@ def analyze_frame(
     min_box_area_percent: float = 3.0,
     max_aspect_ratio: float = 4.0,
     frame_width: int = 1920,
-    frame_height: int = 1080
+    frame_height: int = 1080,
+    engine: str = "precision"
 ) -> NudityDetection:
     """
     Analyze a single frame for nudity.
-    
-    Args:
-        frame: FrameInfo object with path and timestamp
-        threshold: Minimum confidence score to consider a detection
-        labels: Set of labels to consider as nudity (defaults to DEFINITE_NUDITY_LABELS)
-        body_parts: List of specific body parts to detect (empty/None = all exposed parts)
-        min_box_area_percent: Minimum bounding box area as % of frame (filters tiny detections)
-        max_aspect_ratio: Maximum aspect ratio for detections (filters extreme shapes)
-        frame_width: Frame width for area calculations
-        frame_height: Frame height for area calculations
-        
-    Returns:
-        NudityDetection result
     """
-    # Determine which labels to use
+    # Use global config if available to determine engine
+    try:
+        from ..config import Config
+        config = Config.load()
+        engine = config.nudity.engine
+    except:
+        pass
+
+    # Default labels for YOLO vs NudeNet
+    if labels is None and body_parts is None:
+        if engine in ('precision', 'yolo'):
+            labels = {'FEMALE_BREAST_EXPOSED', 'FEMALE_GENITALIA_EXPOSED', 
+                     'MALE_GENITALIA_EXPOSED', 'ANUS_EXPOSED', 'SEXUAL_ACTIVITY'}
+        else:
+            labels = DEFINITE_NUDITY_LABELS
+
     if body_parts and len(body_parts) > 0:
-        # Use user-specified body parts
         labels = set(body_parts)
-        logger.debug(f"Using custom body parts filter: {labels}")
-    elif labels is None:
-        labels = DEFINITE_NUDITY_LABELS
     
-    detector = get_detector()
+    detector = get_detector(engine)
     detections = detector.detect_frame(frame.path)
     
     # Calculate minimum box area threshold
     frame_area = frame_width * frame_height
     min_box_area = (min_box_area_percent / 100.0) * frame_area
     
-    # Filter detections above threshold with box validation
     relevant_detections = []
     labels_found = []
     max_score = 0.0
@@ -172,31 +179,25 @@ def analyze_frame(
         score = det.get('score', 0.0)
         box = det.get('box', [])
         
-        # Basic threshold check
-        if label not in labels or score < threshold:
+        # Check against filtered labels and score threshold
+        if labels and label not in labels:
+            continue
+        if score < threshold:
             continue
         
-        # Bounding box size filter (reject tiny detections)
+        # Bounding box filter (reject tiny detections)
         if len(box) >= 4:
             box_width = abs(box[2] - box[0])
             box_height = abs(box[3] - box[1])
             box_area = box_width * box_height
             
             if box_area < min_box_area:
-                logger.debug(
-                    f"Rejected {label} at {frame.timestamp:.2f}s: "
-                    f"box too small ({box_area:.0f} < {min_box_area:.0f})"
-                )
                 continue
             
-            # Aspect ratio filter (reject extreme shapes like lines/noise)
+            # Aspect ratio filter (reject extreme noise)
             if box_height > 0:
                 aspect_ratio = max(box_width / box_height, box_height / box_width)
                 if aspect_ratio > max_aspect_ratio:
-                    logger.debug(
-                        f"Rejected {label} at {frame.timestamp:.2f}s: "
-                        f"extreme aspect ratio ({aspect_ratio:.1f} > {max_aspect_ratio})"
-                    )
                     continue
         
         relevant_detections.append(det)
@@ -210,7 +211,8 @@ def analyze_frame(
         detections=relevant_detections,
         max_score=max_score,
         labels_found=labels_found,
-        is_nude=is_nude
+        is_nude=is_nude,
+        engine=engine
     )
 
 
@@ -225,35 +227,17 @@ def detect_nudity(
     max_aspect_ratio: float = 4.0,
     show_progress: bool = True,
     progress_callback: Optional[callable] = None,
-    progress_prefix: str = ""
+    progress_prefix: str = "",
+    engine: str = "precision"
 ) -> List[TimeInterval]:
     """
     Detect nudity across a list of frames.
-    
-    Args:
-        frames: List of FrameInfo objects to analyze
-        threshold: Detection confidence threshold (0.0 to 1.0)
-        frame_interval: Time between frames in seconds
-        min_segment_duration: Minimum duration to create a segment
-        body_parts: List of specific body parts to detect (empty = all exposed parts)
-        min_cut_duration: Minimum duration for a cut (prevents micro-cuts)
-        min_box_area_percent: Minimum bounding box area as % of frame
-        max_aspect_ratio: Maximum allowed aspect ratio for detections
-        show_progress: Whether to show progress bar
-        
-    Returns:
-        List of TimeInterval objects where nudity was detected
     """
     if not frames:
         return []
     
     # Log what we're detecting
-    if body_parts and len(body_parts) > 0:
-        logger.info(f"Analyzing {len(frames)} frames for nudity (threshold={threshold}, body_parts={body_parts})")
-    else:
-        logger.info(f"Analyzing {len(frames)} frames for nudity (threshold={threshold}, all exposed body parts)")
-    
-    logger.info(f"Box filters: min_area={min_box_area_percent}%, max_aspect_ratio={max_aspect_ratio}")
+    logger.info(f"Analyzing {len(frames)} frames using '{engine}' engine (threshold={threshold})")
     
     # Analyze all frames
     nudity_frames: List[FrameInfo] = []
@@ -267,7 +251,8 @@ def detect_nudity(
             threshold, 
             body_parts=body_parts,
             min_box_area_percent=min_box_area_percent,
-            max_aspect_ratio=max_aspect_ratio
+            max_aspect_ratio=max_aspect_ratio,
+            engine=engine
         )
         
         if result.is_nude:

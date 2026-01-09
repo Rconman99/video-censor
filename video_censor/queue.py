@@ -513,7 +513,8 @@ def _worker_visual_pipeline(video_path: str, temp_dir: str, config: Config) -> L
         min_box_area_percent=config.nudity.min_box_area_percent,
         max_aspect_ratio=config.nudity.max_aspect_ratio,
         show_progress=True,
-        progress_prefix="[VIDEO]"
+        progress_prefix="[VIDEO]",
+        engine=config.nudity.engine
     )
     
     # Format

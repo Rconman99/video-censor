@@ -126,9 +126,25 @@ class PreferencesDialog(QDialog):
         # types_layout.addWidget(self.detect_nudity)
         
         # Nudity specific
+        self.nudity_engine = QComboBox()
+        self.nudity_engine.addItem("🧠 Precision (Dual-Stage, Best Accuracy)", "precision")
+        self.nudity_engine.addItem("🚀 YOLO (Fast, Reliable)", "yolo")
+        self.nudity_engine.addItem("🕰️ NudeNet (Legacy)", "nudenet")
+        
         self.nudity_threshold_spin = QDoubleSpinBox()
         self.nudity_threshold_spin.setRange(0.1, 0.99)
         self.nudity_threshold_spin.setSingleStep(0.05)
+        
+        types_layout.addWidget(QLabel("Nudity Detection Engine:"))
+        types_layout.addWidget(self.nudity_engine)
+        
+        engine_desc = QLabel(
+            "Precision mode uses a multi-stage AI filter to virtually eliminate false positives (like hands or clothing)."
+        )
+        engine_desc.setStyleSheet("color: #a0a0b0; font-size: 10px; font-style: italic; margin-bottom: 10px;")
+        engine_desc.setWordWrap(True)
+        types_layout.addWidget(engine_desc)
+        
         types_layout.addWidget(QLabel("Nudity Confidence Threshold:"))
         types_layout.addWidget(self.nudity_threshold_spin)
         
@@ -385,6 +401,8 @@ class PreferencesDialog(QDialog):
         self.auto_load_detections.setChecked(self.config.detection_cache.auto_load)
         
         # Detection
+        idx = self.nudity_engine.findData(self.config.nudity.engine)
+        if idx >= 0: self.nudity_engine.setCurrentIndex(idx)
         self.nudity_threshold_spin.setValue(self.config.nudity.threshold)
         
         # LLM
@@ -434,6 +452,7 @@ class PreferencesDialog(QDialog):
         self.config.detection_cache.auto_load = self.auto_load_detections.isChecked()
         
         # Detection
+        self.config.nudity.engine = self.nudity_engine.currentData()
         self.config.nudity.threshold = self.nudity_threshold_spin.value()
         
         # LLM
