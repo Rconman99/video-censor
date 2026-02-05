@@ -9,6 +9,8 @@ from .logging_config import get_logger, get_log_dir
 
 logger = get_logger(__name__)
 
+LOG_FILE = get_log_dir() / "videocensor.log"
+
 
 class UserFriendlyError(Exception):
     """Exception with a user-friendly message"""
@@ -116,9 +118,9 @@ def get_friendly_message(error: Exception) -> Tuple[str, str]:
         if isinstance(error_type, type) and isinstance(error, error_type):
             return msg_func(error)
     
-    # Check string matches in error message
+    # Check string matches in error message (case-insensitive)
     for key, msg_func in ERROR_MESSAGES.items():
-        if isinstance(key, str) and key in error_str:
+        if isinstance(key, str) and key.lower() in error_str:
             return msg_func(error)
     
     # Default fallback

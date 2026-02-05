@@ -79,11 +79,8 @@ class TestGetFriendlyMessageByString:
         assert "video" in title.lower() or "processing" in title.lower()
 
     def test_cuda_error(self):
-        # Note: ERROR_MESSAGES key "CUDA out of memory" is case-sensitive but
-        # get_friendly_message lowercases the error string, so this key never
-        # matches and falls through to the LOG_FILE fallback bug.
-        with pytest.raises(NameError):
-            get_friendly_message(RuntimeError("CUDA out of memory"))
+        title, msg = get_friendly_message(RuntimeError("CUDA out of memory"))
+        assert "gpu" in title.lower() or "memory" in title.lower()
 
     def test_whisper_error(self):
         title, msg = get_friendly_message(RuntimeError("whisper failed to load"))
@@ -102,10 +99,9 @@ class TestGetFriendlyMessageByString:
         assert "settings" in title.lower()
 
     def test_default_fallback(self):
-        # Note: the source has a bug where LOG_FILE is undefined in the fallback path.
-        # This test documents that behavior.
-        with pytest.raises(NameError):
-            get_friendly_message(RuntimeError("something totally unexpected"))
+        title, msg = get_friendly_message(RuntimeError("something totally unexpected"))
+        assert "wrong" in title.lower()
+        assert "unexpected" in msg.lower() or "something totally" in msg.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -132,13 +128,10 @@ class TestSafeOperation:
         assert good_func() == 42
 
     def test_wraps_generic_exception(self):
-        # Note: the source has a bug where LOG_FILE is undefined in the fallback
-        # message path, so a generic ValueError (no keyword match) causes NameError
-        # to propagate through safe_operation instead of UserFriendlyError.
         @safe_operation("test")
         def bad_func():
             raise ValueError("something bad")
-        with pytest.raises(NameError):
+        with pytest.raises(UserFriendlyError):
             bad_func()
 
     def test_passes_through_user_friendly_error(self):
@@ -150,14 +143,13 @@ class TestSafeOperation:
         assert exc_info.value.user_message == "Already friendly"
 
     def test_preserves_original_exception_as_cause(self):
-        # Test with a keyword-matched error so the fallback LOG_FILE bug isn't hit
         @safe_operation("test")
         def bad_func():
-            raise RuntimeError("ffmpeg process crashed")
+            raise ValueError("root cause")
         with pytest.raises(UserFriendlyError) as exc_info:
             bad_func()
         assert exc_info.value.__cause__ is not None
-        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert isinstance(exc_info.value.__cause__, ValueError)
 
     def test_decorated_function_metadata_preserved(self):
         @safe_operation("test")
