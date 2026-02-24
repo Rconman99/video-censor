@@ -318,6 +318,7 @@ class Config:
             # Update content_lookup config
             if 'content_lookup' in data:
                 for key, value in data['content_lookup'].items():
+                    if hasattr(config.content_lookup, key):
                         setattr(config.content_lookup, key, value)
             
             # Update system config

@@ -110,19 +110,23 @@ def notify_system(title: str, message: str, sound: bool = True) -> bool:
     
     try:
         if system == "Darwin":  # macOS
-            script = f'''
-            display notification "{message}" with title "{title}" sound name "Glass"
-            '''
+            # Sanitize inputs to prevent AppleScript injection
+            safe_title = title.replace('\\', '\\\\').replace('"', '\\"')
+            safe_message = message.replace('\\', '\\\\').replace('"', '\\"')
+            script = f'display notification "{safe_message}" with title "{safe_title}" sound name "Glass"'
             subprocess.run(["osascript", "-e", script], check=False)
             return True
         elif system == "Windows":
             # Use Windows toast notifications via PowerShell
+            # Sanitize inputs to prevent PowerShell injection
+            safe_title = title.replace('"', '`"').replace("'", "''")
+            safe_message = message.replace('"', '`"').replace("'", "''")
             script = f'''
             [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
             $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
             $textNodes = $template.GetElementsByTagName("text")
-            $textNodes.Item(0).AppendChild($template.CreateTextNode("{title}")) | Out-Null
-            $textNodes.Item(1).AppendChild($template.CreateTextNode("{message}")) | Out-Null
+            $textNodes.Item(0).AppendChild($template.CreateTextNode("{safe_title}")) | Out-Null
+            $textNodes.Item(1).AppendChild($template.CreateTextNode("{safe_message}")) | Out-Null
             $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("VideoCensor")
             $notifier.Show([Windows.UI.Notifications.ToastNotification]::new($template))
             '''

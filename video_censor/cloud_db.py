@@ -22,9 +22,10 @@ import os
 
 logger = logging.getLogger(__name__)
 
-# Supabase configuration
-SUPABASE_URL = "https://asnazljepcdspoimadqq.supabase.co"
-SUPABASE_ANON_KEY = "sb_publishable_SaOEm2oWD75d5X3DR7PPYg_y3gBYq7G"
+# Supabase configuration - loaded from environment variables
+# Set VIDEOCENSOR_SUPABASE_URL and VIDEOCENSOR_SUPABASE_ANON_KEY in your environment
+SUPABASE_URL = os.environ.get("VIDEOCENSOR_SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.environ.get("VIDEOCENSOR_SUPABASE_ANON_KEY", "")
 
 # =============================================================================
 # FREE TIER LIMITS (Supabase Free Plan - December 2024)
