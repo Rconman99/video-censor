@@ -40,7 +40,7 @@ from video_censor.notifications import notify_processing_complete, notify_render
 
 # Supported video formats
 VIDEO_EXTENSIONS = ('.mp4', '.mkv', '.avi', '.mov', '.m4v', '.wmv', '.flv', '.webm')
-OUTPUT_DIR = "/Volumes/20tb/cleanmovies"
+OUTPUT_DIR = str(Path.home() / "Movies" / "VideoCensor")
 
 
 class DropZone(QFrame):

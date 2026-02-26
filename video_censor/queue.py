@@ -316,8 +316,8 @@ class ProcessingQueue:
         from pathlib import Path
         
         if filepath is None:
-            filepath = Path("/Volumes/20tb/.video_censor_queue.json")
-        
+            filepath = Path.home() / ".video_censor_queue.json"
+
         # Save pending, processing AND review-ready items
         items_to_save = [item for item in self._items if item.is_pending or item.is_processing or item.is_review_ready]
         
@@ -357,8 +357,8 @@ class ProcessingQueue:
         from pathlib import Path
         
         if filepath is None:
-            filepath = Path("/Volumes/20tb/.video_censor_queue.json")
-        
+            filepath = Path.home() / ".video_censor_queue.json"
+
         if not filepath.exists():
             return 0
         

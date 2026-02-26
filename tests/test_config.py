@@ -34,7 +34,7 @@ class TestConfigDefaults:
         """Test nudity config defaults."""
         config = NudityConfig()
         
-        assert config.threshold == 0.75  # Updated default
+        assert config.threshold == 0.6  # Precision nudity default
         assert config.frame_interval == 0.25
         assert config.min_segment_duration == 0.5
         assert config.buffer_before == 0.25
@@ -77,7 +77,7 @@ class TestConfigLoad:
         
         # Should have defaults
         assert config.profanity.censor_mode == "beep"
-        assert config.nudity.threshold == 0.75  # Updated default
+        assert config.nudity.threshold == 0.6  # Precision nudity default
     
     def test_load_empty_file(self):
         """Test loading from empty file returns defaults."""
@@ -221,5 +221,5 @@ class TestConfigNoPath:
         config = Config.load(None)
         
         assert config.profanity.censor_mode == "beep"
-        assert config.nudity.threshold == 0.75  # Updated default
+        assert config.nudity.threshold == 0.6  # Precision nudity default
         assert config.whisper.model_size == "base"

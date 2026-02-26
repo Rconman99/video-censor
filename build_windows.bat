@@ -2,7 +2,7 @@
 setlocal
 
 set APP_NAME=VideoCensor
-set VERSION=1.1.0
+set VERSION=1.0.0
 
 echo === Building %APP_NAME% v%VERSION% for Windows ===
 
