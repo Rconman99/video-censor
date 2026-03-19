@@ -252,3 +252,9 @@ ENTRY POINTS
 ---
 
 *Last updated: January 2026*
+
+## Active Skills
+<!-- Auto-detected by ~/.claude/scripts/select-skills.py — update as the project evolves -->
+- llm-app-patterns — AI content analysis
+- python-development-python-scaffold — Python project structure
+- prompt-engineering-patterns — detection prompts
